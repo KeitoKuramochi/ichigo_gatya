@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ICHIGO 決済</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"
+        integrity="sha512-f+t6//rz3Iy3hp1CiwtsigYtyWuGk7bf6xl2RTOPvmyMIfTQJ4iy6Lg1dah1bsLQ9SLideJGicgmOkBsBXP1aA=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<style>
+  :root { --pink: #ff6f91; }
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 1.4rem; }
+  button { font-size: 1rem; padding: 10px 16px; border-radius: 10px; border: none; background: var(--pink); color: #fff; cursor: pointer; }
+  button:disabled { background: #ccc; cursor: default; }
+  .balance { font-size: 1.6rem; font-weight: 700; color: var(--pink); }
+  .muted { color: #888; font-size: .85rem; }
+  .ok { color: #1e8449; }
+  .err { color: #c0392b; white-space: pre-wrap; }
+  input[type="text"] { width: 100%; box-sizing: border-box; padding: 6px 8px; }
+  details { margin-top: 24px; }
+</style>
+</head>
+<body>
+  <h1>ICHIGO ガチャガチャ 決済</h1>
+
+  <button id="connectBtn">ウォレットを接続</button>
+  <p class="muted" id="account"></p>
+  <p class="balance" id="balanceLabel"></p>
+
+  <button id="payBtn" disabled>支払う(<span id="costLabel"></span> ICHIGO)</button>
+  <p id="status"></p>
+
+  <details>
+    <summary>物理ガチャガチャとの連携設定(任意)</summary>
+    <p class="muted">
+      ブリッジサーバーのURLを入力すると、送金確定後にそこへ通知して実機のロックを解除します。
+      空欄のままなら、支払い(送金)だけを行います。
+    </p>
+    <input type="text" id="bridgeUrlInput" placeholder="例: http://192.168.1.50:3001">
+  </details>
+
+<script type="module">
+const OP_CHAIN_ID = 10;
+const TOKEN_ADDR = "0x836700463Dce76D9Cc3CDf6F6EDF946312c01869";
+const GAME_WALLET = "0x70775B1d24176De0fda2776303B8a603C671cFFb"; // 授業のDiscord IDに紐づく自分のウォレット
+const COST = 100;
+const ERC20_ABI = [
+  "function balanceOf(address) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+  "function transfer(address to, uint256 amount) returns (bool)",
+];
+
+const $ = (id) => document.getElementById(id);
+$("costLabel").textContent = COST;
+$("bridgeUrlInput").value = localStorage.getItem("bridgeUrl") || "";
+$("bridgeUrlInput").addEventListener("change", () => {
+  localStorage.setItem("bridgeUrl", $("bridgeUrlInput").value.trim());
+});
+
+let provider, signer, account, token, decimals = 18n;
+
+function showStatus(text, cls) {
+  $("status").textContent = text;
+  $("status").className = cls || "";
+}
+
+async function ensureOptimism() {
+  const hexId = "0x" + OP_CHAIN_ID.toString(16);
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hexId }] });
+    return true;
+  } catch (err) {
+    if (err.code === 4902) {
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: hexId,
+          chainName: "Optimism",
+          nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+          rpcUrls: ["https://mainnet.optimism.io"],
+          blockExplorerUrls: ["https://optimistic.etherscan.io"],
+        }],
+      });
+      return true;
+    }
+    showStatus("Optimismネットワークへの切り替えに失敗しました: " + (err.message || err), "err");
+    return false;
+  }
+}
+
+async function refreshBalance() {
+  const bal = await token.balanceOf(account);
+  $("balanceLabel").textContent = ethers.formatUnits(bal, decimals) + " ICHIGO";
+  return bal;
+}
+
+$("connectBtn").addEventListener("click", async () => {
+  if (!window.ethereum) {
+    showStatus("MetaMaskなどのウォレットが見つかりません", "err");
+    return;
+  }
+  try {
+    if (!(await ensureOptimism())) return;
+    provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    signer = await provider.getSigner();
+    account = await signer.getAddress();
+    token = new ethers.Contract(TOKEN_ADDR, ERC20_ABI, signer);
+    decimals = await token.decimals();
+
+    $("account").textContent = account;
+    await refreshBalance();
+    $("payBtn").disabled = false;
+    showStatus("", "");
+  } catch (err) {
+    showStatus("接続エラー: " + (err.shortMessage || err.message || err), "err");
+  }
+});
+
+$("payBtn").addEventListener("click", async () => {
+  const btn = $("payBtn");
+  try {
+    btn.disabled = true;
+    const amount = ethers.parseUnits(String(COST), decimals);
+    const bal = await refreshBalance();
+    if (bal < amount) {
+      showStatus(`イチゴが足りません(必要: ${COST})`, "err");
+      return;
+    }
+
+    showStatus("MetaMaskで送金を承認してください…", "");
+    const tx = await token.transfer(GAME_WALLET, amount);
+
+    showStatus("送金を確認中…(数秒)", "");
+    await tx.wait();
+
+    showStatus(`支払い成功! (tx: ${tx.hash})`, "ok");
+    await refreshBalance();
+
+    const bridgeUrl = $("bridgeUrlInput").value.trim();
+    if (!bridgeUrl) return;
+
+    try {
+      const res = await fetch(bridgeUrl.replace(/\/$/, "") + "/verify-and-unlock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ txHash: tx.hash }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        showStatus(
+          data.esp32Notified ? "支払い成功! 物理ガチャガチャを排出しました" : "支払い成功!(物理ガチャガチャは未接続)",
+          "ok"
+        );
+      } else {
+        showStatus("送金検証NG: " + (data.error || "不明なエラー"), "err");
+      }
+    } catch (err) {
+      console.warn("ブリッジサーバーへの通知に失敗:", err);
+      showStatus("支払い成功!(ブリッジサーバーに届きませんでした)", "ok");
+    }
+  } catch (err) {
+    showStatus("エラー: " + (err.shortMessage || err.message || err), "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
