@@ -13,10 +13,17 @@ import 'dotenv/config';
 import express from 'express';
 import { ethers } from 'ethers';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GAME_DIR = path.join(__dirname, '..', 'payment');
+const USED_TX_FILE = path.join(__dirname, 'used-tx-hashes.json');
+
+// 確定から一定ブロック数経つまでは「まだ覆る可能性がある」として受け付けない
+const MIN_CONFIRMATIONS = 2;
+// 支払いから一定時間以上経過したtxHashは、後から使い回されるのを防ぐため受け付けない
+const MAX_TX_AGE_SECONDS = 15 * 60;
 
 const {
   RPC_URL,
@@ -46,7 +53,20 @@ const provider = new ethers.JsonRpcProvider(RPC_URL);
 const tokenInterface = new ethers.Interface(ERC20_ABI);
 const tokenContract = new ethers.Contract(TOKEN_ADDR, ERC20_ABI, provider);
 
-const usedTxHashes = new Set();
+// プロセス再起動をまたいでも二重使用を防げるよう、使用済みtxHashをファイルに永続化する
+function loadUsedTxHashes() {
+  try {
+    const raw = fs.readFileSync(USED_TX_FILE, 'utf8');
+    return new Set(JSON.parse(raw));
+  } catch {
+    return new Set();
+  }
+}
+function saveUsedTxHashes() {
+  fs.writeFileSync(USED_TX_FILE, JSON.stringify([...usedTxHashes]));
+}
+
+const usedTxHashes = loadUsedTxHashes();
 let tokenDecimals;
 let costInWei;
 
@@ -56,14 +76,27 @@ async function loadTokenDecimals() {
   console.log(`ICHIGOトークンのdecimals=${tokenDecimals}, COST=${COST} ICHIGO (=${costInWei.toString()} wei相当)`);
 }
 
-// receiptがまだ取得できない(ブロック伝播待ち)場合に備えて数回リトライする
-async function getReceiptWithRetry(txHash, attempts = 5, delayMs = 1000) {
+// receiptがまだ取得できない(ブロック伝播待ち)場合や、確定ブロック数が
+// MIN_CONFIRMATIONSに達していない場合に備えて数回リトライする
+async function getConfirmedReceiptWithRetry(txHash, attempts = 10, delayMs = 1000) {
   for (let i = 0; i < attempts; i++) {
     const receipt = await provider.getTransactionReceipt(txHash);
-    if (receipt) return receipt;
+    if (receipt) {
+      const currentBlock = await provider.getBlockNumber();
+      const confirmations = currentBlock - receipt.blockNumber + 1;
+      if (confirmations >= MIN_CONFIRMATIONS) return receipt;
+    }
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
   return null;
+}
+
+// 古い(すでに一度支払いに使われた可能性のある)txHashを後から使い回されないよう、
+// トランザクションが含まれるブロックの時刻が新しいことを確認する
+async function isRecentEnough(receipt) {
+  const block = await provider.getBlock(receipt.blockNumber);
+  const ageSeconds = Date.now() / 1000 - block.timestamp;
+  return ageSeconds <= MAX_TX_AGE_SECONDS;
 }
 
 function findValidTransfer(receipt) {
@@ -117,12 +150,15 @@ app.post('/verify-and-unlock', async (req, res) => {
   }
 
   try {
-    const receipt = await getReceiptWithRetry(txHash);
+    const receipt = await getConfirmedReceiptWithRetry(txHash);
     if (!receipt) {
-      return res.status(404).json({ ok: false, error: 'トランザクションが見つかりません(未確定の可能性)' });
+      return res.status(404).json({ ok: false, error: 'トランザクションが見つからないか、まだ十分に確定していません' });
     }
     if (receipt.status !== 1) {
       return res.status(400).json({ ok: false, error: 'トランザクションが失敗しています' });
+    }
+    if (!(await isRecentEnough(receipt))) {
+      return res.status(400).json({ ok: false, error: '古すぎる取引です(過去の送金の使い回しは無効)' });
     }
 
     const transfer = findValidTransfer(receipt);
@@ -130,8 +166,13 @@ app.post('/verify-and-unlock', async (req, res) => {
       return res.status(400).json({ ok: false, error: 'GAME_WALLET宛の有効なICHIGO送金が見つかりません' });
     }
 
+    // 二重チェック: リトライ中に別リクエストが同じtxHashを先に使用済みにしていないか再確認
+    if (usedTxHashes.has(txHash)) {
+      return res.status(409).json({ ok: false, error: 'このtxHashはすでに使用済みです' });
+    }
     usedTxHashes.add(txHash);
-    console.log(`検証OK: ${txHash}(送金額はCOST以上、GAME_WALLET宛のICHIGO送金を確認)`);
+    saveUsedTxHashes();
+    console.log(`検証OK: ${txHash}(送金額はCOST以上、GAME_WALLET宛のICHIGO送金を確認、${MIN_CONFIRMATIONS}confirmations以上)`);
 
     // 送金の検証自体は成功しているので、ESP32側の失敗(未接続など)で
     // レスポンス全体を失敗扱いにはしない(検証とハード連携を切り分ける)。
