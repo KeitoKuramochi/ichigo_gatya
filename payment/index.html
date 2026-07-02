@@ -41,6 +41,8 @@ const ERC20_ABI = [
   "function transfer(address to, uint256 amount) returns (bool)",
 ];
 
+const WALLETCONNECT_PROJECT_ID = "7888d175a84dfe42211139f54afc0802";
+
 const $ = (id) => document.getElementById(id);
 $("costLabel").textContent = COST;
 
@@ -87,14 +89,38 @@ async function refreshBalance() {
   return bal;
 }
 
-$("connectBtn").addEventListener("click", async () => {
-  if (!window.ethereum) {
-    showStatus("MetaMaskなどのウォレットが見つかりません", "err");
-    return;
+let wcProvider = null;
+
+// window.ethereum(MetaMask拡張機能や、MetaMaskアプリ内ブラウザ)があればそれを使う。
+// 無ければ(=普通のSafari/Chromeで開いている)WalletConnectで接続する。
+// この場合「接続」ボタンを押すとMetaMaskアプリ自体が自動で開き、承認するとページに戻ってくる。
+async function getEip1193Provider() {
+  if (window.ethereum) return window.ethereum;
+
+  if (!wcProvider) {
+    const { EthereumProvider } = await import("https://esm.sh/@walletconnect/ethereum-provider@2.17.0");
+    wcProvider = await EthereumProvider.init({
+      projectId: WALLETCONNECT_PROJECT_ID,
+      chains: [OP_CHAIN_ID],
+      showQrModal: true,
+      metadata: {
+        name: "ICHIGO ガチャガチャ",
+        description: "ICHIGOで支払うと実機のガチャガチャが動きます",
+        url: location.origin,
+        icons: [],
+      },
+    });
   }
+  await wcProvider.connect();
+  return wcProvider;
+}
+
+$("connectBtn").addEventListener("click", async () => {
   try {
-    if (!(await ensureOptimism())) return;
-    provider = new ethers.BrowserProvider(window.ethereum);
+    const eth = await getEip1193Provider();
+    if (eth === window.ethereum && !(await ensureOptimism())) return;
+
+    provider = new ethers.BrowserProvider(eth);
     await provider.send("eth_requestAccounts", []);
     signer = await provider.getSigner();
     account = await signer.getAddress();
