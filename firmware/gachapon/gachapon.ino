@@ -55,7 +55,7 @@ const char* AP_SSID = "ICHIGO-GACHAPON";
 const char* AP_PASSWORD = "ichigo1234"; // 8文字以上必須
 
 // その日のブリッジの公開URL(cloudflaredのトンネルURLなど)。末尾に/は付けない。
-const char* BRIDGE_URL = "https://REPLACE-ME.trycloudflare.com";
+const char* BRIDGE_URL = "https://plan-debate-organization-flyer.trycloudflare.com";
 const char* SHARED_SECRET = "ichigo123"; // bridge/.envのESP32_SECRETと揃える
 
 const unsigned long POLL_INTERVAL_MS = 2000; // 何ms間隔でブリッジに問い合わせるか
