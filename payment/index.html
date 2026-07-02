@@ -44,6 +44,12 @@ const ERC20_ABI = [
 const $ = (id) => document.getElementById(id);
 $("costLabel").textContent = COST;
 
+// このページ自身がブリッジサーバーから配信されている場合は同一オリジン(相対パス)でよいが、
+// Vercelなど別オリジンで配信する場合は、QRコードのURLに ?bridge=https://xxxx のように
+// その日のブリッジ(トンネル)のURLを付けておけば、それを使って通知する。
+const BRIDGE_BASE = new URLSearchParams(location.search).get("bridge") || "";
+const VERIFY_URL = BRIDGE_BASE.replace(/\/$/, "") + "/verify-and-unlock";
+
 let provider, signer, account, token, decimals = 18n;
 
 function showStatus(text, cls) {
@@ -122,20 +128,18 @@ $("payBtn").addEventListener("click", async () => {
     await tx.wait();
     await refreshBalance();
 
-    // このページはブリッジサーバー自身から配信される想定なので、
-    // 同じオリジンの/verify-and-unlockに送金を通知し、実機を解除してもらう。
+    // 同一オリジン(相対パス)か、?bridge=で指定されたトンネルURLに通知し、実機を解除してもらう。
     showStatus("送金確定。ガチャガチャのロックを解除しています…", "");
-    const res = await fetch("/verify-and-unlock", {
+    const res = await fetch(VERIFY_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ txHash: tx.hash }),
     });
     const data = await res.json();
 
-    if (data.ok && data.esp32Notified) {
-      showStatus("支払い完了! ガチャガチャからカプセルが出ます", "ok");
-    } else if (data.ok) {
-      showStatus("送金は確認できましたが、実機に接続できませんでした。係員に連絡してください", "err");
+    if (data.ok) {
+      // ESP32はポーリング方式なので、実際に解除されるまで数秒のタイムラグがある。
+      showStatus("支払い完了! まもなくガチャガチャのロックが解除されます", "ok");
     } else {
       showStatus("送金の確認に失敗しました: " + (data.error || "不明なエラー"), "err");
     }

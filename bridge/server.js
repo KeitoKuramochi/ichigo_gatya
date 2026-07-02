@@ -1,8 +1,13 @@
 // Step 2: ICHIGO送金の検証ブリッジ
 //
 // payment/index.html から送金成功時の txHash を受け取り、Optimism上で
-// 「本当にGAME_WALLET宛にCOST以上のICHIGOが送られたか」をオンチェーンで検証し、
-// OKであればESP32の /unlock にリクエストを送って物理ガチャを動かす。
+// 「本当にGAME_WALLET宛にCOST以上のICHIGOが送られたか」をオンチェーンで検証する。
+//
+// ESP32とはローカルネットワークで直接繋がっているとは限らない(スマホのテザリング等、
+// 別ネットワークにいることがある)ため、ブリッジからESP32へ直接リクエストは送らない。
+// 代わりに、ESP32側が数秒おきにこのブリッジの /poll-unlock を問い合わせに来る
+// (ポーリング)方式にしている。ブリッジはインターネット上に公開されている
+// (cloudflaredトンネル等)前提なので、ESP32はインターネットさえ繋がっていればよい。
 //
 // 起動方法:
 //   cp .env.example .env  (中身を自分の環境に合わせて編集)
@@ -11,9 +16,11 @@
 
 import 'dotenv/config';
 import express from 'express';
+import cors from 'cors';
 import { ethers } from 'ethers';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -30,14 +37,13 @@ const {
   TOKEN_ADDR,
   GAME_WALLET,
   COST,
-  ESP32_IP,
   ESP32_SECRET,
   PORT = 3001,
 } = process.env;
 
-// ESP32_IP/ESP32_SECRETは未設定でも動く(ICHIGO_gameとMacだけで送金検証を試す段階でも使えるように)。
-// それ以外の、送金検証そのものに必須の値だけ必須チェックする。
-for (const [name, value] of Object.entries({ RPC_URL, TOKEN_ADDR, GAME_WALLET, COST })) {
+// ESP32_SECRETが無いと/poll-unlockの認証が成立しないため、他の値と同様に必須にする
+// (未設定を「認証なし」として素通りさせない = fail closed)。
+for (const [name, value] of Object.entries({ RPC_URL, TOKEN_ADDR, GAME_WALLET, COST, ESP32_SECRET })) {
   if (!value) {
     console.error(`環境変数 ${name} が設定されていません。.env を確認してください。`);
     process.exit(1);
@@ -119,22 +125,13 @@ function findValidTransfer(receipt) {
   return null;
 }
 
-async function triggerEsp32Unlock() {
-  if (!ESP32_IP || !ESP32_SECRET) {
-    console.warn('ESP32_IP/ESP32_SECRET未設定のため、物理ガチャへの通知はスキップします(送金検証のみ実施)');
-    return false;
-  }
-  const response = await fetch(`http://${ESP32_IP}/unlock`, {
-    method: 'POST',
-    headers: { 'X-Secret': ESP32_SECRET },
-  });
-  if (!response.ok) {
-    throw new Error(`ESP32が${response.status}を返しました`);
-  }
-  return true;
-}
+// ESP32がポーリングで見に来る「解除待ち」フラグ。メモリ上だけで十分
+// (ブリッジが再起動したら未処理の解除request自体が失われるが、実運用上は
+// せいぜい数秒のポーリング間隔なので、ほぼ即座にESP32が拾いに来る想定)。
+let pendingUnlock = false;
 
 const app = express();
+app.use(cors()); // Vercel等、別オリジンで配信されたpayment/index.htmlからも叩けるようにする
 app.use(express.json());
 app.use(express.static(GAME_DIR)); // 同じオリジンでpayment/を配信(スマホからも同じIP:PORTで開ける)
 
@@ -174,20 +171,35 @@ app.post('/verify-and-unlock', async (req, res) => {
     saveUsedTxHashes();
     console.log(`検証OK: ${txHash}(送金額はCOST以上、GAME_WALLET宛のICHIGO送金を確認、${MIN_CONFIRMATIONS}confirmations以上)`);
 
-    // 送金の検証自体は成功しているので、ESP32側の失敗(未接続など)で
-    // レスポンス全体を失敗扱いにはしない(検証とハード連携を切り分ける)。
-    let esp32Notified = false;
-    try {
-      esp32Notified = await triggerEsp32Unlock();
-    } catch (err) {
-      console.warn('ESP32への通知に失敗しました(送金検証自体は成功):', err.message);
-    }
+    // ESP32へは直接送らず、「解除待ち」フラグを立てるだけ。ESP32が次のポーリングで拾いに来る。
+    pendingUnlock = true;
 
-    return res.json({ ok: true, esp32Notified });
+    return res.json({ ok: true, queued: true });
   } catch (err) {
     console.error('verify-and-unlock処理中にエラー:', err);
     return res.status(500).json({ ok: false, error: 'サーバー内部エラー' });
   }
+});
+
+function isValidEsp32Secret(provided) {
+  if (!ESP32_SECRET || !provided) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(ESP32_SECRET);
+  // 長さが違うとtimingSafeEqualが例外を投げるため、その場合は先に弾く
+  // (このタイミング差はURL/クエリに秘密を載せる場合ほど実用上の脅威にはならない)
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+// ESP32が数秒おきに問い合わせてくるエンドポイント。解除待ちがあれば1回だけ通知して消費する。
+// 合言葉はURLではなくヘッダー(X-Secret)で受け取る(URLはログ等に残りやすいため)。
+app.get('/poll-unlock', (req, res) => {
+  if (!isValidEsp32Secret(req.get('X-Secret'))) {
+    return res.status(403).json({ unlock: false, error: 'forbidden' });
+  }
+  const unlock = pendingUnlock;
+  pendingUnlock = false;
+  return res.json({ unlock });
 });
 
 loadTokenDecimals()
