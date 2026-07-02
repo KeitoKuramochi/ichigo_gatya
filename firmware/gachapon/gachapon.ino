@@ -20,9 +20,9 @@
 
   書き込み前に、下の WIFI_SSID / WIFI_PASSWORD / BRIDGE_URL / SHARED_SECRET を
   自分の環境に合わせて書き換えること。SHARED_SECRET は
-  bridge/.env の ESP32_SECRET と必ず同じ文字列にする。
-  BRIDGE_URL は cloudflared 等で発行された「その日の」公開URL(https://から)。
-  トンネルを再起動すると変わるので、その都度ここを書き換えて再書き込みが必要。
+  Render.com上のbridgeのENV(ESP32_SECRET)と必ず同じ文字列にする。
+  BRIDGE_URL はRender.comにデプロイしたbridgeの固定URL(https://ichigo-gatya.onrender.com)。
+  Renderにデプロイし直しても変わらないので、通常は書き換え不要。
 
   必要な追加ライブラリ(ライブラリマネージャからインストール):
     - "U8g2" (by oliver / olikraus) — 日本語表示用のフォントを内蔵している
@@ -55,7 +55,7 @@ const char* AP_SSID = "ICHIGO-GACHAPON";
 const char* AP_PASSWORD = "ichigo1234"; // 8文字以上必須
 
 // その日のブリッジの公開URL(cloudflaredのトンネルURLなど)。末尾に/は付けない。
-const char* BRIDGE_URL = "https://involving-ourselves-raise-headquarters.trycloudflare.com";
+const char* BRIDGE_URL = "https://ichigo-gatya.onrender.com";
 const char* SHARED_SECRET = "ichigo123"; // bridge/.envのESP32_SECRETと揃える
 
 const unsigned long POLL_INTERVAL_MS = 2000; // 何ms間隔でブリッジに問い合わせるか
