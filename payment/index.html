@@ -24,6 +24,7 @@
   <p class="muted">ウォレットを接続して支払うと、実機のガチャガチャのロックが解除されます。</p>
 
   <button id="connectBtn">① ウォレットを接続</button>
+  <p class="muted">アカウントを間違えた場合は、MetaMask側でアカウントを切り替えてください(自動で反映されます)</p>
   <p class="muted" id="account"></p>
   <p class="balance" id="balanceLabel"></p>
 
@@ -85,6 +86,18 @@ async function refreshBalance() {
   const bal = await token.balanceOf(account);
   $("balanceLabel").textContent = ethers.formatUnits(bal, decimals) + " ICHIGO";
   return bal;
+}
+
+// MetaMask側でアカウントを切り替えた時に、ページ側も自動で追従する
+if (window.ethereum) {
+  window.ethereum.on("accountsChanged", async (accounts) => {
+    if (!accounts.length || !signer) return; // まだ接続前なら何もしない
+    signer = await provider.getSigner();
+    account = accounts[0];
+    $("account").textContent = account;
+    await refreshBalance();
+    showStatus("アカウントを切り替えました", "ok");
+  });
 }
 
 $("connectBtn").addEventListener("click", async () => {
