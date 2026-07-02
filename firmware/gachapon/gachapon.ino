@@ -55,7 +55,7 @@ const char* AP_SSID = "ICHIGO-GACHAPON";
 const char* AP_PASSWORD = "ichigo1234"; // 8文字以上必須
 
 // その日のブリッジの公開URL(cloudflaredのトンネルURLなど)。末尾に/は付けない。
-const char* BRIDGE_URL = "https://plan-debate-organization-flyer.trycloudflare.com";
+const char* BRIDGE_URL = "https://involving-ourselves-raise-headquarters.trycloudflare.com";
 const char* SHARED_SECRET = "ichigo123"; // bridge/.envのESP32_SECRETと揃える
 
 const unsigned long POLL_INTERVAL_MS = 2000; // 何ms間隔でブリッジに問い合わせるか
@@ -108,13 +108,31 @@ void showIdleScreen() {
   showLines("ICHIGO", "たいきちゅう", "IP: " + currentIP().toString());
 }
 
+// HTTPS(TLS)通信を数秒おきに繰り返すとESP32のメモリが徐々に減っていき、
+// 十分下がるとハングすることがある(EN押下=再起動で直るのはこれが原因)。
+// 本番では誰も手動でリセットできないため、危険な水準まで下がったら自分で再起動する。
+const uint32_t MIN_SAFE_HEAP = 20000; // これを下回ったら自動再起動(バイト)
+
 // ブリッジに「解除待ちある?」と問い合わせ、あればサーボを動かす
 void pollBridge() {
+  if (ESP.getFreeHeap() < MIN_SAFE_HEAP) {
+    Serial.print("空きメモリが少なくなったため自動再起動します。空きヒープ: ");
+    Serial.println(ESP.getFreeHeap());
+    showLines("ICHIGO", "さいきどうします");
+    delay(300);
+    ESP.restart();
+  }
+
   WiFiClientSecure client;
   client.setInsecure(); // 簡易検証用にTLS証明書の検証を省略している
 
   HTTPClient http;
-  String url = String(BRIDGE_URL) + "/poll-unlock";
+  http.setConnectTimeout(5000);
+  http.setTimeout(5000);
+  // BRIDGE_URLの末尾に"/"が付いていても二重スラッシュにならないようにする
+  String base = String(BRIDGE_URL);
+  while (base.endsWith("/")) base.remove(base.length() - 1);
+  String url = base + "/poll-unlock";
   if (!http.begin(client, url)) {
     Serial.println("poll-unlockへの接続準備に失敗しました");
     return;
@@ -122,6 +140,8 @@ void pollBridge() {
   http.addHeader("X-Secret", SHARED_SECRET); // 合言葉はURLではなくヘッダーで送る
 
   int code = http.GET();
+  Serial.print("空きヒープ: ");
+  Serial.println(ESP.getFreeHeap());
   if (code == 200) {
     String body = http.getString();
     if (body.indexOf("\"unlock\":true") >= 0) {
