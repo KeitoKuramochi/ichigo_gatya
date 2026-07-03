@@ -14,6 +14,9 @@
   input[type="range"] { flex: 1; }
   input[type="number"], #secret { width: 90px; font-size: 1rem; padding: 6px 8px; border: 1px solid #ccc; border-radius: 8px; }
   #secret { width: 100%; box-sizing: border-box; }
+  .servo-tabs { display: flex; gap: 8px; margin-top: 8px; }
+  .servo-tabs button { flex: 1; margin-top: 0; padding: 8px; font-size: .9rem; background: #eee; color: #333; }
+  .servo-tabs button.active { background: var(--pink); color: #fff; }
   button { font-size: 1rem; padding: 10px 16px; border-radius: 10px; border: none; background: var(--pink); color: #fff; cursor: pointer; margin-top: 24px; }
   button:disabled { background: #ccc; cursor: default; }
   .ok { color: #1e8449; }
@@ -27,8 +30,14 @@
   <h1>ICHIGO モーターテスト</h1>
   <p class="muted">
     角度と保持時間(秒)を指定して実機のサーボを1回だけ動かせます。ちょうどいい解除角度・時間を探すためのページです。
-    動かした後は自動でロック角度(180度)に戻ります。
+    動かした後は自動で待機角度に戻ります(メイン=180度、補充=閉じ角度)。
   </p>
+
+  <label>対象のサーボ</label>
+  <div class="servo-tabs">
+    <button type="button" id="servoMainBtn" class="active" data-servo="main">メイン(コイン投入ロック)</button>
+    <button type="button" id="servoRefillBtn" data-servo="refill">補充用(フタのロック)</button>
+  </div>
 
   <label for="secret">合言葉(X-Secret)</label>
   <input id="secret" type="text" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gachapon.inoのSHARED_SECRETと同じ文字列">
@@ -40,9 +49,9 @@
     <input id="angleNumber" type="number" min="0" max="180" step="1" value="0">
   </div>
   <div class="presets">
-    <button type="button" data-angle="0">0(解除角度)</button>
+    <button type="button" data-angle="0">0</button>
     <button type="button" data-angle="90">90</button>
-    <button type="button" data-angle="180">180(ロック位置・起動時の初期角度)</button>
+    <button type="button" data-angle="180">180</button>
   </div>
 
   <label for="duration">保持時間: <span id="durationLabel">0.4</span>秒</label>
@@ -76,6 +85,19 @@ const speedRange = $("speedRange");
 const speedNumber = $("speedNumber");
 const speedLabel = $("speedLabel");
 const moveBtn = $("moveBtn");
+const servoMainBtn = $("servoMainBtn");
+const servoRefillBtn = $("servoRefillBtn");
+
+let selectedServo = localStorage.getItem("ichigo_test_servo") || "main";
+function syncServo(value) {
+  selectedServo = value;
+  servoMainBtn.classList.toggle("active", value === "main");
+  servoRefillBtn.classList.toggle("active", value === "refill");
+  localStorage.setItem("ichigo_test_servo", value);
+}
+syncServo(selectedServo);
+servoMainBtn.addEventListener("click", () => syncServo("main"));
+servoRefillBtn.addEventListener("click", () => syncServo("refill"));
 
 // 前回入力した値をブラウザに覚えさせておく(調整作業は何度も繰り返すため)
 secretInput.value = localStorage.getItem("ichigo_test_secret") || "";
@@ -144,7 +166,7 @@ moveBtn.addEventListener("click", async () => {
     const res = await fetch("/test-move", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Secret": secret },
-      body: JSON.stringify({ angle, holdMs, moveMs }),
+      body: JSON.stringify({ angle, holdMs, moveMs, servo: selectedServo }),
     });
     const data = await res.json();
     if (!data.ok) {
@@ -152,10 +174,11 @@ moveBtn.addEventListener("click", async () => {
       return;
     }
 
+    const servoLabel = selectedServo === "refill" ? "補充用" : "メイン";
     showStatus("予約OK。ESP32が次のポーリングで拾うのを待っています…", "busy");
     const status = await pollTestMoveStatus(data.requestId);
     if (status === "done") {
-      showStatus(`実行完了! 角度${angle}度・回転${moveMs}ms・保持${holdMs}msで動かしました`, "ok");
+      showStatus(`実行完了! [${servoLabel}] 角度${angle}度・回転${moveMs}ms・保持${holdMs}msで動かしました`, "ok");
     } else if (status === "failed") {
       showStatus("ESP32側で失敗しました(サーボ未接続の可能性があります)", "err");
     } else {

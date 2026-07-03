@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ICHIGO 補充用ロック管理</title>
+<style>
+  :root { --pink: #ff6f91; }
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 1.4rem; }
+  .muted { color: #888; font-size: .85rem; margin: 4px 0 0; }
+  label { display: block; font-weight: 600; margin-top: 20px; }
+  input[type="text"] { width: 100%; box-sizing: border-box; font-size: 1rem; padding: 6px 8px; border: 1px solid #ccc; border-radius: 8px; }
+  .buttons { display: flex; gap: 12px; margin-top: 24px; }
+  button { flex: 1; font-size: 1.1rem; padding: 16px; border-radius: 12px; border: none; color: #fff; cursor: pointer; }
+  button:disabled { background: #ccc; cursor: default; }
+  #openBtn { background: #1e8449; }
+  #closeBtn { background: var(--pink); }
+  .ok { color: #1e8449; }
+  .err { color: #c0392b; white-space: pre-wrap; }
+  .busy { color: #888; }
+</style>
+</head>
+<body>
+  <h1>ICHIGO 補充用ロック管理</h1>
+  <p class="muted">
+    カプセル補充用のフタのロックを開閉します。決済フローとは無関係の管理者用ページです。
+    「開ける」を押すとフタが開いた状態のまま保持されるので、補充作業が終わったら必ず「閉める」を押してください。
+  </p>
+
+  <label for="secret">合言葉(X-Secret)</label>
+  <input id="secret" type="text" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gachapon.inoのSHARED_SECRETと同じ文字列">
+  <p class="muted">ESP32・bridgeの設定と同じ合言葉を入力してください(ブラウザに保存されます)</p>
+
+  <div class="buttons">
+    <button id="openBtn">開ける</button>
+    <button id="closeBtn">閉める</button>
+  </div>
+  <p id="status"></p>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const secretInput = $("secret");
+const openBtn = $("openBtn");
+const closeBtn = $("closeBtn");
+
+secretInput.value = localStorage.getItem("ichigo_admin_secret") || "";
+secretInput.addEventListener("input", () => localStorage.setItem("ichigo_admin_secret", secretInput.value));
+
+function showStatus(text, cls) {
+  $("status").textContent = text;
+  $("status").className = cls || "";
+}
+
+async function pollAdminLockStatus(requestId) {
+  const maxTries = 20; // 約20秒。bridge側のタイムアウト(10秒)+余裕分
+  for (let i = 0; i < maxTries; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      const res = await fetch(`/admin-lock-status?requestId=${requestId}`);
+      const data = await res.json();
+      if (data.status === "done" || data.status === "failed") return data.status;
+    } catch {
+      // ネットワークの瞬断はリトライで吸収する
+    }
+  }
+  return "timeout";
+}
+
+async function sendAction(action, label) {
+  const secret = secretInput.value.trim();
+  if (!secret) {
+    showStatus("合言葉(X-Secret)を入力してください", "err");
+    return;
+  }
+
+  openBtn.disabled = true;
+  closeBtn.disabled = true;
+  try {
+    showStatus("ESP32に予約を送信中…", "busy");
+    const res = await fetch("/admin-lock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Secret": secret },
+      body: JSON.stringify({ action }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      showStatus("予約に失敗しました: " + (data.error || "不明なエラー"), "err");
+      return;
+    }
+
+    showStatus("予約OK。ESP32が次のポーリングで拾うのを待っています…", "busy");
+    const status = await pollAdminLockStatus(data.requestId);
+    if (status === "done") {
+      showStatus(`${label}ました`, "ok");
+    } else if (status === "failed") {
+      showStatus("ESP32側で失敗しました(サーボ未接続の可能性があります)", "err");
+    } else {
+      showStatus("タイムアウトしました。ESP32がオフライン、または合言葉が違う可能性があります", "err");
+    }
+  } catch (err) {
+    showStatus("エラー: " + (err.message || err), "err");
+  } finally {
+    openBtn.disabled = false;
+    closeBtn.disabled = false;
+  }
+}
+
+openBtn.addEventListener("click", () => sendAction("open", "開け"));
+closeBtn.addEventListener("click", () => sendAction("close", "閉め"));
+</script>
+</body>
+</html>

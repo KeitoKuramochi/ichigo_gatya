@@ -26,6 +26,7 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GAME_DIR = path.join(__dirname, '..', 'payment');
 const TEST_DIR = path.join(__dirname, '..', 'test');
+const ADMIN_DIR = path.join(__dirname, '..', 'admin');
 const USED_TX_FILE = path.join(__dirname, 'used-tx-hashes.json');
 
 // 確定から一定ブロック数経つまでは「まだ覆る可能性がある」として受け付けない
@@ -50,6 +51,8 @@ const TEST_MOVE_MAX_HOLD_MS = 5000;
 // 回転そのものにかける時間(0=瞬時に動く、従来通り)
 const TEST_MOVE_MIN_MOVE_MS = 0;
 const TEST_MOVE_MAX_MOVE_MS = 5000;
+// 補充用ロックの開閉(/admin-lock)がESP32から結果報告されるまでの待ち時間
+const ADMIN_LOCK_TIMEOUT_MS = 10 * 1000;
 
 const {
   RPC_URL,
@@ -158,6 +161,10 @@ const unlockRequests = new Map(); // txHash -> { status, createdAt, dispatchedAt
 // キーがtxHashではなくランダムなrequestIdである点だけが違う。
 const testMoveRequests = new Map(); // requestId -> { status, angle, holdMs, createdAt, dispatchedAt? }
 
+// 補充用ロックの開閉(管理者ページから)のリクエストを管理する。
+// unlockRequests/testMoveRequestsと同じ状態遷移(pending → dispatched → done/failed)。
+const adminLockRequests = new Map(); // requestId -> { status, action, createdAt, dispatchedAt? }
+
 // pending/dispatchedのまま古くなったリクエストをfailedに倒し、完了済みリクエストを
 // 一定時間後にメモリから捨てる。各エンドポイントの先頭で毎回呼ぶ。
 function sweepStaleUnlockRequests() {
@@ -196,11 +203,29 @@ function sweepStaleTestMoveRequests() {
   }
 }
 
+// adminLockRequests版のsweep(ロジックはtestMoveRequests版と同じ)
+function sweepStaleAdminLockRequests() {
+  const now = Date.now();
+  for (const [requestId, request] of adminLockRequests) {
+    if (request.status === 'pending' && now - request.createdAt > PENDING_MAX_AGE_MS) {
+      request.status = 'failed';
+      request.failReason = 'esp32-offline';
+    } else if (request.status === 'dispatched' && now - request.dispatchedAt > ADMIN_LOCK_TIMEOUT_MS) {
+      request.status = 'failed';
+      request.failReason = 'esp32-timeout';
+    }
+    if ((request.status === 'done' || request.status === 'failed') && now - request.createdAt > 60 * 60 * 1000) {
+      adminLockRequests.delete(requestId);
+    }
+  }
+}
+
 const app = express();
 app.use(cors()); // Vercel等、別オリジンで配信されたpayment/index.htmlからも叩けるようにする
 app.use(express.json());
 app.use(express.static(GAME_DIR)); // 同じオリジンでpayment/を配信(スマホからも同じIP:PORTで開ける)
 app.use('/test', express.static(TEST_DIR)); // モーターのテスト用ページを/test/以下で配信
+app.use('/admin', express.static(ADMIN_DIR)); // 補充用ロックの管理者ページを/admin/以下で配信
 
 app.post('/verify-and-unlock', async (req, res) => {
   const { txHash } = req.body ?? {};
@@ -259,7 +284,8 @@ app.post('/test-move', (req, res) => {
     return res.status(403).json({ ok: false, error: 'forbidden' });
   }
 
-  const { angle, holdMs, moveMs } = req.body ?? {};
+  const { angle, holdMs, moveMs, servo } = req.body ?? {};
+  const servoName = servo === 'refill' ? 'refill' : 'main';
   if (
     typeof angle !== 'number' || !Number.isFinite(angle) ||
     angle < TEST_MOVE_MIN_ANGLE || angle > TEST_MOVE_MAX_ANGLE
@@ -286,9 +312,39 @@ app.post('/test-move', (req, res) => {
     angle: Math.round(angle),
     holdMs: Math.round(holdMs),
     moveMs: Math.round(moveMs),
+    servo: servoName,
     createdAt: Date.now(),
   });
   return res.json({ ok: true, requestId });
+});
+
+// 補充用ロック(2個目のサーボ)の開閉を指示する。メインの解除動作と違い、
+// 動かしたら管理者が/admin-lockでもう一度指示するまで開閉状態を保持する
+// (自動で元に戻らない)。決済とは無関係だが、誰でも動かせないようX-Secretで保護する。
+app.post('/admin-lock', (req, res) => {
+  if (!isValidEsp32Secret(req.get('X-Secret'))) {
+    return res.status(403).json({ ok: false, error: 'forbidden' });
+  }
+
+  const { action } = req.body ?? {};
+  if (action !== 'open' && action !== 'close') {
+    return res.status(400).json({ ok: false, error: 'actionは"open"または"close"で指定してください' });
+  }
+
+  sweepStaleAdminLockRequests();
+  const requestId = crypto.randomUUID();
+  adminLockRequests.set(requestId, { status: 'pending', action, createdAt: Date.now() });
+  return res.json({ ok: true, requestId });
+});
+
+// 管理者ページがポーリングで結果を確認する。requestIdはランダムなUUIDで、
+// これ単体を知られても実害はないため認証不要。
+app.get('/admin-lock-status', (req, res) => {
+  sweepStaleAdminLockRequests();
+  const { requestId } = req.query;
+  const request = adminLockRequests.get(requestId);
+  if (!request) return res.json({ status: 'unknown' });
+  return res.json({ status: request.status, failReason: request.failReason });
 });
 
 // 決済ページと同様、テストページもポーリングで結果を確認する。
@@ -324,12 +380,20 @@ function findPendingTestMove() {
   return null;
 }
 
+function findPendingAdminLock() {
+  for (const [requestId, request] of adminLockRequests) {
+    if (request.status === 'pending') return { requestId, request };
+  }
+  return null;
+}
+
 app.get('/poll-unlock', (req, res) => {
   if (!isValidEsp32Secret(req.get('X-Secret'))) {
     return res.status(403).json({ unlock: false, error: 'forbidden' });
   }
   sweepStaleUnlockRequests();
   sweepStaleTestMoveRequests();
+  sweepStaleAdminLockRequests();
 
   let unlockPayload = { unlock: false };
   for (const [txHash, request] of unlockRequests) {
@@ -352,10 +416,23 @@ app.get('/poll-unlock', (req, res) => {
       testAngle: pendingTestMove.request.angle,
       testHoldMs: pendingTestMove.request.holdMs,
       testMoveMs: pendingTestMove.request.moveMs,
+      testServo: pendingTestMove.request.servo,
     };
   }
 
-  return res.json({ ...unlockPayload, ...testMovePayload });
+  let adminLockPayload = { adminLock: false };
+  const pendingAdminLock = findPendingAdminLock();
+  if (pendingAdminLock) {
+    pendingAdminLock.request.status = 'dispatched';
+    pendingAdminLock.request.dispatchedAt = Date.now();
+    adminLockPayload = {
+      adminLock: true,
+      adminRequestId: pendingAdminLock.requestId,
+      adminAction: pendingAdminLock.request.action,
+    };
+  }
+
+  return res.json({ ...unlockPayload, ...testMovePayload, ...adminLockPayload });
 });
 
 // ESP32がサーボを実際に動かした後、その結果(成功/失敗)を報告してくるエンドポイント。
@@ -391,6 +468,23 @@ app.post('/test-move-result', (req, res) => {
   request.status = success ? 'done' : 'failed';
   if (!success) request.failReason = 'esp32-reported-failure';
   console.log(`ESP32からテスト動作結果の報告: ${requestId} -> ${request.status}`);
+  return res.json({ ok: true, noted: true });
+});
+
+// ESP32が補充用ロックの開閉を実行した後、その結果(成功/失敗)を報告してくるエンドポイント。
+app.post('/admin-lock-result', (req, res) => {
+  if (!isValidEsp32Secret(req.get('X-Secret'))) {
+    return res.status(403).json({ ok: false, error: 'forbidden' });
+  }
+  sweepStaleAdminLockRequests();
+  const { requestId, success } = req.body ?? {};
+  const request = adminLockRequests.get(requestId);
+  if (!request) {
+    return res.json({ ok: true, noted: false });
+  }
+  request.status = success ? 'done' : 'failed';
+  if (!success) request.failReason = 'esp32-reported-failure';
+  console.log(`ESP32から補充ロック結果の報告: ${requestId} -> ${request.status}`);
   return res.json({ ok: true, noted: true });
 });
 
