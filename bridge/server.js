@@ -47,6 +47,9 @@ const TEST_MOVE_MIN_ANGLE = 0;
 const TEST_MOVE_MAX_ANGLE = 180;
 const TEST_MOVE_MIN_HOLD_MS = 50;
 const TEST_MOVE_MAX_HOLD_MS = 5000;
+// 回転そのものにかける時間(0=瞬時に動く、従来通り)
+const TEST_MOVE_MIN_MOVE_MS = 0;
+const TEST_MOVE_MAX_MOVE_MS = 5000;
 
 const {
   RPC_URL,
@@ -256,7 +259,7 @@ app.post('/test-move', (req, res) => {
     return res.status(403).json({ ok: false, error: 'forbidden' });
   }
 
-  const { angle, holdMs } = req.body ?? {};
+  const { angle, holdMs, moveMs } = req.body ?? {};
   if (
     typeof angle !== 'number' || !Number.isFinite(angle) ||
     angle < TEST_MOVE_MIN_ANGLE || angle > TEST_MOVE_MAX_ANGLE
@@ -269,6 +272,12 @@ app.post('/test-move', (req, res) => {
   ) {
     return res.status(400).json({ ok: false, error: `holdMsは${TEST_MOVE_MIN_HOLD_MS}〜${TEST_MOVE_MAX_HOLD_MS}の数値で指定してください` });
   }
+  if (
+    typeof moveMs !== 'number' || !Number.isFinite(moveMs) ||
+    moveMs < TEST_MOVE_MIN_MOVE_MS || moveMs > TEST_MOVE_MAX_MOVE_MS
+  ) {
+    return res.status(400).json({ ok: false, error: `moveMsは${TEST_MOVE_MIN_MOVE_MS}〜${TEST_MOVE_MAX_MOVE_MS}の数値で指定してください` });
+  }
 
   sweepStaleTestMoveRequests();
   const requestId = crypto.randomUUID();
@@ -276,6 +285,7 @@ app.post('/test-move', (req, res) => {
     status: 'pending',
     angle: Math.round(angle),
     holdMs: Math.round(holdMs),
+    moveMs: Math.round(moveMs),
     createdAt: Date.now(),
   });
   return res.json({ ok: true, requestId });
@@ -341,6 +351,7 @@ app.get('/poll-unlock', (req, res) => {
       testRequestId: pendingTestMove.requestId,
       testAngle: pendingTestMove.request.angle,
       testHoldMs: pendingTestMove.request.holdMs,
+      testMoveMs: pendingTestMove.request.moveMs,
     };
   }
 

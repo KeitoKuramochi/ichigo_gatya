@@ -50,7 +50,14 @@
     <input id="durationRange" type="range" min="0.05" max="3" step="0.05" value="0.4">
     <input id="durationNumber" type="number" min="0.05" max="3" step="0.05" value="0.4">
   </div>
-  <p class="muted">現在のコード上のデフォルトは0.4秒(400ms)です</p>
+  <p class="muted">角度まで動いた後、この時間だけ止まってから戻ります。現在のコード上のデフォルトは0.4秒(400ms)です</p>
+
+  <label for="speed">回転にかける時間(ゆっくり度): <span id="speedLabel">0.5</span>秒</label>
+  <div class="row">
+    <input id="speedRange" type="range" min="0" max="3" step="0.1" value="0.5">
+    <input id="speedNumber" type="number" min="0" max="3" step="0.1" value="0.5">
+  </div>
+  <p class="muted">0秒=瞬時に動く(従来の動き)。大きくするほどゆっくり回る。往路・復路それぞれにこの時間をかける</p>
 
   <button id="moveBtn">この設定で動かす</button>
   <p id="status"></p>
@@ -65,12 +72,16 @@ const angleLabel = $("angleLabel");
 const durationRange = $("durationRange");
 const durationNumber = $("durationNumber");
 const durationLabel = $("durationLabel");
+const speedRange = $("speedRange");
+const speedNumber = $("speedNumber");
+const speedLabel = $("speedLabel");
 const moveBtn = $("moveBtn");
 
 // 前回入力した値をブラウザに覚えさせておく(調整作業は何度も繰り返すため)
 secretInput.value = localStorage.getItem("ichigo_test_secret") || "";
 angleRange.value = angleNumber.value = angleLabel.textContent = localStorage.getItem("ichigo_test_angle") || 0;
 durationRange.value = durationNumber.value = durationLabel.textContent = localStorage.getItem("ichigo_test_duration") || 0.4;
+speedRange.value = speedNumber.value = speedLabel.textContent = localStorage.getItem("ichigo_test_speed") || 0.5;
 
 function syncAngle(value) {
   angleRange.value = angleNumber.value = angleLabel.textContent = value;
@@ -80,11 +91,17 @@ function syncDuration(value) {
   durationRange.value = durationNumber.value = durationLabel.textContent = value;
   localStorage.setItem("ichigo_test_duration", value);
 }
+function syncSpeed(value) {
+  speedRange.value = speedNumber.value = speedLabel.textContent = value;
+  localStorage.setItem("ichigo_test_speed", value);
+}
 
 angleRange.addEventListener("input", () => syncAngle(angleRange.value));
 angleNumber.addEventListener("input", () => syncAngle(angleNumber.value));
 durationRange.addEventListener("input", () => syncDuration(durationRange.value));
 durationNumber.addEventListener("input", () => syncDuration(durationNumber.value));
+speedRange.addEventListener("input", () => syncSpeed(speedRange.value));
+speedNumber.addEventListener("input", () => syncSpeed(speedNumber.value));
 secretInput.addEventListener("input", () => localStorage.setItem("ichigo_test_secret", secretInput.value));
 
 document.querySelectorAll(".presets button").forEach((btn) => {
@@ -119,6 +136,7 @@ moveBtn.addEventListener("click", async () => {
   }
   const angle = Number(angleNumber.value);
   const holdMs = Math.round(Number(durationNumber.value) * 1000);
+  const moveMs = Math.round(Number(speedNumber.value) * 1000);
 
   moveBtn.disabled = true;
   try {
@@ -126,7 +144,7 @@ moveBtn.addEventListener("click", async () => {
     const res = await fetch("/test-move", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Secret": secret },
-      body: JSON.stringify({ angle, holdMs }),
+      body: JSON.stringify({ angle, holdMs, moveMs }),
     });
     const data = await res.json();
     if (!data.ok) {
@@ -137,7 +155,7 @@ moveBtn.addEventListener("click", async () => {
     showStatus("予約OK。ESP32が次のポーリングで拾うのを待っています…", "busy");
     const status = await pollTestMoveStatus(data.requestId);
     if (status === "done") {
-      showStatus(`実行完了! 角度${angle}度・${holdMs}msで動かしました`, "ok");
+      showStatus(`実行完了! 角度${angle}度・回転${moveMs}ms・保持${holdMs}msで動かしました`, "ok");
     } else if (status === "failed") {
       showStatus("ESP32側で失敗しました(サーボ未接続の可能性があります)", "err");
     } else {

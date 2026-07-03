@@ -68,6 +68,7 @@ const int SERVO_PIN = 18;
 const int LOCK_ANGLE = 180; // 起動時・待機中の角度(サーボの初期位置)
 const int UNLOCK_ANGLE = 0; // 解除動作で一瞬向ける角度(その後LOCK_ANGLEに戻る)
 const int UNLOCK_HOLD_MS = 400;
+const int UNLOCK_MOVE_MS = 500; // ロック⇔解除角度の間をゆっくり動かすのにかける時間
 
 // このボードのOLEDは 128x64, I2Cアドレス0x3C, SDA=GPIO21/SCL=GPIO22(基板内蔵配線)
 // 画面が真っ白/真っ暗のままなら、末尾を _F_HW_I2C のまま別コンストラクタ
@@ -97,10 +98,30 @@ void showLines(const String& line1, const String& line2 = "", const String& line
   u8g2.sendBuffer();
 }
 
+// サーボを1度ずつ動かして、指定時間(durationMs)かけてゆっくり目的角度まで回す。
+// Servo.write()をそのまま1回呼ぶと(SG90自体の最高速で)一瞬で動いてしまうため、
+// 角度を小刻みに分けてdelayを挟むことで見た目の速度を落としている。
+// durationMs<=0またはfromAngle==toAngleの場合は従来通り即座に動かす。
+void moveServoSmoothly(int fromAngle, int toAngle, unsigned long durationMs) {
+  int steps = abs(toAngle - fromAngle);
+  if (steps == 0 || durationMs == 0) {
+    gachaServo.write(toAngle);
+    return;
+  }
+  int direction = (toAngle > fromAngle) ? 1 : -1;
+  unsigned long stepDelayMs = durationMs / steps;
+  int angle = fromAngle;
+  for (int i = 0; i < steps; i++) {
+    angle += direction;
+    gachaServo.write(angle);
+    if (stepDelayMs > 0) delay(stepDelayMs);
+  }
+}
+
 void unlockOnce() {
-  gachaServo.write(UNLOCK_ANGLE);
+  moveServoSmoothly(LOCK_ANGLE, UNLOCK_ANGLE, UNLOCK_MOVE_MS);
   delay(UNLOCK_HOLD_MS);
-  gachaServo.write(LOCK_ANGLE);
+  moveServoSmoothly(UNLOCK_ANGLE, LOCK_ANGLE, UNLOCK_MOVE_MS);
 }
 
 // JSONの簡易パーサ("field":"value"の形の文字列値だけを取り出す)。
@@ -253,20 +274,21 @@ void pollBridge() {
       showIdleScreen();
     }
 
-    // モーター調整用のテスト動作。角度・保持時間はbridge側で範囲チェック済みだが、
+    // モーター調整用のテスト動作。角度・保持時間・回転時間はbridge側で範囲チェック済みだが、
     // ネットワーク越しに受け取った値なのでサーボ保護のため念のためもう一度clampする。
     if (body.indexOf("\"testMove\":true") >= 0) {
       String testRequestId = extractJsonStringField(body, "testRequestId");
       long angle = constrain(extractJsonNumberField(body, "testAngle"), 0, 180);
       long holdMs = constrain(extractJsonNumberField(body, "testHoldMs"), 0, 5000);
-      Serial.println("テスト動作を検知: angle=" + String(angle) + " holdMs=" + String(holdMs));
+      long moveMs = constrain(extractJsonNumberField(body, "testMoveMs"), 0, 5000);
+      Serial.println("テスト動作を検知: angle=" + String(angle) + " holdMs=" + String(holdMs) + " moveMs=" + String(moveMs));
       showLines("テストどうさ", String(angle) + "do " + String(holdMs) + "ms");
 
       bool servoOk = gachaServo.attached();
       if (servoOk) {
-        gachaServo.write((int)angle);
+        moveServoSmoothly(gachaServo.read(), (int)angle, (unsigned long)moveMs);
         delay((unsigned long)holdMs);
-        gachaServo.write(LOCK_ANGLE);
+        moveServoSmoothly((int)angle, LOCK_ANGLE, (unsigned long)moveMs);
       } else {
         Serial.println("警告: サーボが接続されていません。失敗として報告します");
       }
