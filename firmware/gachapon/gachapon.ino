@@ -98,24 +98,29 @@ void showLines(const String& line1, const String& line2 = "", const String& line
   u8g2.sendBuffer();
 }
 
-// サーボを1度ずつ動かして、指定時間(durationMs)かけてゆっくり目的角度まで回す。
+// サーボを、指定時間(durationMs)かけてゆっくり目的角度まで回す。
 // Servo.write()をそのまま1回呼ぶと(SG90自体の最高速で)一瞬で動いてしまうため、
-// 角度を小刻みに分けてdelayを挟むことで見た目の速度を落としている。
+// 一定間隔(STEP_INTERVAL_MS)ごとに「目的角度までの進み具合」に応じた角度を
+// 書き込むことで見た目の速度を落としている。
+// 角度差(steps)で分割していた旧実装だと、角度差が小さいのに長い時間を指定した
+// 場合(例: 10度だけ動かすのに0.5秒)、1度あたりの待ち時間が異常に大きくなり、
+// 「1度動いて止まる」を繰り返すガクガクした動きになってしまっていた。一定間隔で
+// 割合を計算する方式にすることで、角度差の大小によらず滑らかさを保てる。
 // durationMs<=0またはfromAngle==toAngleの場合は従来通り即座に動かす。
 void moveServoSmoothly(int fromAngle, int toAngle, unsigned long durationMs) {
-  int steps = abs(toAngle - fromAngle);
-  if (steps == 0 || durationMs == 0) {
+  if (fromAngle == toAngle || durationMs == 0) {
     gachaServo.write(toAngle);
     return;
   }
-  int direction = (toAngle > fromAngle) ? 1 : -1;
-  unsigned long stepDelayMs = durationMs / steps;
-  int angle = fromAngle;
-  for (int i = 0; i < steps; i++) {
-    angle += direction;
-    gachaServo.write(angle);
-    if (stepDelayMs > 0) delay(stepDelayMs);
+  const unsigned long STEP_INTERVAL_MS = 15; // サーボのPWM周期(約20ms)に近い間隔
+  unsigned long totalSteps = durationMs / STEP_INTERVAL_MS;
+  if (totalSteps < 1) totalSteps = 1;
+  for (unsigned long i = 1; i <= totalSteps; i++) {
+    long angle = fromAngle + ((long)(toAngle - fromAngle) * (long)i) / (long)totalSteps;
+    gachaServo.write((int)angle);
+    delay(STEP_INTERVAL_MS);
   }
+  gachaServo.write(toAngle); // 割り算の丸めを吸収し、確実に目的角度で終わる
 }
 
 void unlockOnce() {
