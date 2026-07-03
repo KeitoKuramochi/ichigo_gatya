@@ -6,7 +6,10 @@
   やること:
     - WiFi(スマホのテザリング等、インターネットに出られるものなら何でもよい)に接続する
     - 数秒おきに、ブリッジサーバーの /poll-unlock に「解除待ちある?」と問い合わせる
-    - 「ある」と返ってきたらサーボでロック解除動作を1回行う
+    - 「ある」と返ってきたらサーボでロック解除動作を1回行い、その結果(成功/失敗)を
+      /unlock-result でブリッジに報告する(決済ページはこの報告を見て初めて
+      「支払い完了」を表示する。報告が届かない場合はブリッジ側がタイムアウトで
+      自動的に失敗扱いにするので、送金だけ成立してロックが開かない事故を防げる)
     - 基板内蔵の0.96インチOLED(SSD1306, I2C)に日本語で状態を表示する
     - 2回目以降の書き込みはUSB不要、WiFi経由(OTA)でできる
 
@@ -100,6 +103,96 @@ void unlockOnce() {
   gachaServo.write(LOCK_ANGLE);
 }
 
+// JSONの簡易パーサ("field":"value"の形の文字列値だけを取り出す)。
+// このプロジェクトの応答は単純なフラット構造なので、ライブラリを増やさずこれで十分。
+String extractJsonStringField(const String& body, const String& field) {
+  String needle = "\"" + field + "\":\"";
+  int idx = body.indexOf(needle);
+  if (idx < 0) return "";
+  int start = idx + needle.length();
+  int end = body.indexOf("\"", start);
+  if (end < 0) return "";
+  return body.substring(start, end);
+}
+
+// 上と同じ簡易パーサの数値版("field":123 の形の値を取り出す。モーターのテスト動作の
+// angle/holdMsのように、引用符なしの数値フィールドを読むために使う)。
+long extractJsonNumberField(const String& body, const String& field) {
+  String needle = "\"" + field + "\":";
+  int idx = body.indexOf(needle);
+  if (idx < 0) return -1;
+  int start = idx + needle.length();
+  int end = start;
+  while (end < (int)body.length() && (isDigit(body[end]) || body[end] == '-')) end++;
+  if (end == start) return -1;
+  return body.substring(start, end).toInt();
+}
+
+// サーボを実際に動かしたかどうかをbridgeに報告する。これが届かないと、bridge側は
+// 一定時間後にタイムアウトとして「失敗」扱いにし、決済者に解除できなかったことを伝える
+// (送金だけ成立してロックが開かない事故を、決済者に気づかせずに終わらせないための仕組み)。
+void reportUnlockResult(const String& requestId, bool success) {
+  if (requestId.length() == 0) return;
+
+  String base = String(BRIDGE_URL);
+  while (base.endsWith("/")) base.remove(base.length() - 1);
+  String url = base + "/unlock-result";
+  String payload = String("{\"requestId\":\"") + requestId + "\",\"success\":" + (success ? "true" : "false") + "}";
+
+  for (int attempt = 0; attempt < 2; attempt++) { // 1回失敗しても1回だけ再送する
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    http.setConnectTimeout(5000);
+    http.setTimeout(5000);
+    if (!http.begin(client, url)) continue;
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("X-Secret", SHARED_SECRET);
+    int code = http.POST(payload);
+    http.end();
+    if (code == 200) {
+      Serial.println("解除結果をbridgeに報告しました: " + String(success ? "成功" : "失敗"));
+      return;
+    }
+    Serial.print("解除結果の報告に失敗(リトライ): HTTP ");
+    Serial.println(code);
+    delay(300);
+  }
+  Serial.println("解除結果の報告に最終的に失敗しました(bridge側はタイムアウトで検知します)");
+}
+
+// モーターのテスト動作(/test-move経由)を実行した結果をbridgeに報告する。
+// reportUnlockResultと同じ理由(bridge側のタイムアウト検知)でリトライも同様にする。
+void reportTestMoveResult(const String& requestId, bool success) {
+  if (requestId.length() == 0) return;
+
+  String base = String(BRIDGE_URL);
+  while (base.endsWith("/")) base.remove(base.length() - 1);
+  String url = base + "/test-move-result";
+  String payload = String("{\"requestId\":\"") + requestId + "\",\"success\":" + (success ? "true" : "false") + "}";
+
+  for (int attempt = 0; attempt < 2; attempt++) {
+    WiFiClientSecure client;
+    client.setInsecure();
+    HTTPClient http;
+    http.setConnectTimeout(5000);
+    http.setTimeout(5000);
+    if (!http.begin(client, url)) continue;
+    http.addHeader("Content-Type", "application/json");
+    http.addHeader("X-Secret", SHARED_SECRET);
+    int code = http.POST(payload);
+    http.end();
+    if (code == 200) {
+      Serial.println("テスト動作の結果をbridgeに報告しました: " + String(success ? "成功" : "失敗"));
+      return;
+    }
+    Serial.print("テスト動作結果の報告に失敗(リトライ): HTTP ");
+    Serial.println(code);
+    delay(300);
+  }
+  Serial.println("テスト動作結果の報告に最終的に失敗しました(bridge側はタイムアウトで検知します)");
+}
+
 IPAddress currentIP() {
   return AP_MODE ? WiFi.softAPIP() : WiFi.localIP();
 }
@@ -145,9 +238,40 @@ void pollBridge() {
   if (code == 200) {
     String body = http.getString();
     if (body.indexOf("\"unlock\":true") >= 0) {
+      String requestId = extractJsonStringField(body, "requestId");
       Serial.println("解除待ちを検知。ロック解除動作を実行します");
       showLines("かいじょ!", "だしています", "");
-      unlockOnce();
+
+      bool servoOk = gachaServo.attached();
+      if (servoOk) {
+        unlockOnce();
+      } else {
+        Serial.println("警告: サーボが接続されていません。失敗として報告します");
+      }
+      reportUnlockResult(requestId, servoOk);
+
+      showIdleScreen();
+    }
+
+    // モーター調整用のテスト動作。角度・保持時間はbridge側で範囲チェック済みだが、
+    // ネットワーク越しに受け取った値なのでサーボ保護のため念のためもう一度clampする。
+    if (body.indexOf("\"testMove\":true") >= 0) {
+      String testRequestId = extractJsonStringField(body, "testRequestId");
+      long angle = constrain(extractJsonNumberField(body, "testAngle"), 0, 180);
+      long holdMs = constrain(extractJsonNumberField(body, "testHoldMs"), 0, 5000);
+      Serial.println("テスト動作を検知: angle=" + String(angle) + " holdMs=" + String(holdMs));
+      showLines("テストどうさ", String(angle) + "do " + String(holdMs) + "ms");
+
+      bool servoOk = gachaServo.attached();
+      if (servoOk) {
+        gachaServo.write((int)angle);
+        delay((unsigned long)holdMs);
+        gachaServo.write(LOCK_ANGLE);
+      } else {
+        Serial.println("警告: サーボが接続されていません。失敗として報告します");
+      }
+      reportTestMoveResult(testRequestId, servoOk);
+
       showIdleScreen();
     }
   } else {

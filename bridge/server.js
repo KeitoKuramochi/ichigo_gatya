@@ -25,12 +25,28 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GAME_DIR = path.join(__dirname, '..', 'payment');
+const TEST_DIR = path.join(__dirname, '..', 'test');
 const USED_TX_FILE = path.join(__dirname, 'used-tx-hashes.json');
 
 // 確定から一定ブロック数経つまでは「まだ覆る可能性がある」として受け付けない
 const MIN_CONFIRMATIONS = 2;
 // 支払いから一定時間以上経過したtxHashは、後から使い回されるのを防ぐため受け付けない
 const MAX_TX_AGE_SECONDS = 15 * 60;
+// ESP32が解除指示を受け取ってから、実行結果(成功/失敗)を報告してくるまでの待ち時間。
+// これを過ぎても報告が無ければ「失敗」とみなし、決済者に解除できなかったことを伝える
+// (これが無いと、送金だけ成立してロックは開かない、という事故に誰も気づけない)。
+const UNLOCK_ESP32_TIMEOUT_MS = 15 * 1000;
+// ESP32がオフライン等で解除リクエストを一度も取得しに来ないまま放置される時間の上限。
+// これが無いと、支払いからずっと後にESP32が復帰した際、無関係なタイミングで
+// 古い支払いの解除が実行されてしまう(誰もいない時にカプセルが出る事故)を防げない。
+const PENDING_MAX_AGE_MS = 5 * 60 * 1000;
+// モーターのテスト動作(/test-move)がESP32から結果報告されるまでの待ち時間
+const TEST_MOVE_TIMEOUT_MS = 10 * 1000;
+// モーターのテスト動作で受け付ける角度・保持時間の範囲(サーボ・機構の可動範囲を超えないようにする)
+const TEST_MOVE_MIN_ANGLE = 0;
+const TEST_MOVE_MAX_ANGLE = 180;
+const TEST_MOVE_MIN_HOLD_MS = 50;
+const TEST_MOVE_MAX_HOLD_MS = 5000;
 
 const {
   RPC_URL,
@@ -125,15 +141,63 @@ function findValidTransfer(receipt) {
   return null;
 }
 
-// ESP32がポーリングで見に来る「解除待ち」フラグ。メモリ上だけで十分
-// (ブリッジが再起動したら未処理の解除request自体が失われるが、実運用上は
-// せいぜい数秒のポーリング間隔なので、ほぼ即座にESP32が拾いに来る想定)。
-let pendingUnlock = false;
+// 解除リクエストをtxHashごとに状態管理する(メモリ上だけで十分。ブリッジが
+// 再起動したら未処理のリクエスト自体が失われるが、その場合は決済ページ側の
+// ポーリングがタイムアウトしてユーザーに「解除確認できず」を伝えるので事故にはならない)。
+//
+// 状態遷移: pending(検証OK、ESP32のポーリング待ち)
+//         → dispatched(ESP32が/poll-unlockで取得、実行結果報告待ち)
+//         → unlocked(ESP32が成功報告) / failed(ESP32が失敗報告、またはタイムアウト)
+const unlockRequests = new Map(); // txHash -> { status, createdAt, dispatchedAt? }
+
+// モーターのテスト動作(角度・保持時間を指定して1回動かす)のリクエストを管理する。
+// unlockRequestsと同じ状態遷移(pending → dispatched → done/failed)だが、
+// キーがtxHashではなくランダムなrequestIdである点だけが違う。
+const testMoveRequests = new Map(); // requestId -> { status, angle, holdMs, createdAt, dispatchedAt? }
+
+// pending/dispatchedのまま古くなったリクエストをfailedに倒し、完了済みリクエストを
+// 一定時間後にメモリから捨てる。各エンドポイントの先頭で毎回呼ぶ。
+function sweepStaleUnlockRequests() {
+  const now = Date.now();
+  for (const [txHash, request] of unlockRequests) {
+    if (request.status === 'pending' && now - request.createdAt > PENDING_MAX_AGE_MS) {
+      request.status = 'failed';
+      request.failReason = 'esp32-offline';
+      console.warn(`ESP32が一定時間ポーリングに来ず、解除リクエストを失効させました: ${txHash}`);
+    } else if (request.status === 'dispatched' && now - request.dispatchedAt > UNLOCK_ESP32_TIMEOUT_MS) {
+      request.status = 'failed';
+      request.failReason = 'esp32-timeout';
+      console.warn(`解除結果がESP32から届かずタイムアウトしました: ${txHash}`);
+    }
+    if ((request.status === 'unlocked' || request.status === 'failed') && now - request.createdAt > 60 * 60 * 1000) {
+      unlockRequests.delete(txHash);
+    }
+  }
+}
+
+// testMoveRequests版のsweep(ロジックはsweepStaleUnlockRequestsと同じだが、
+// 対象マップ・タイムアウト時間・完了ステータス名(done)が異なる)
+function sweepStaleTestMoveRequests() {
+  const now = Date.now();
+  for (const [requestId, request] of testMoveRequests) {
+    if (request.status === 'pending' && now - request.createdAt > PENDING_MAX_AGE_MS) {
+      request.status = 'failed';
+      request.failReason = 'esp32-offline';
+    } else if (request.status === 'dispatched' && now - request.dispatchedAt > TEST_MOVE_TIMEOUT_MS) {
+      request.status = 'failed';
+      request.failReason = 'esp32-timeout';
+    }
+    if ((request.status === 'done' || request.status === 'failed') && now - request.createdAt > 60 * 60 * 1000) {
+      testMoveRequests.delete(requestId);
+    }
+  }
+}
 
 const app = express();
 app.use(cors()); // Vercel等、別オリジンで配信されたpayment/index.htmlからも叩けるようにする
 app.use(express.json());
 app.use(express.static(GAME_DIR)); // 同じオリジンでpayment/を配信(スマホからも同じIP:PORTで開ける)
+app.use('/test', express.static(TEST_DIR)); // モーターのテスト用ページを/test/以下で配信
 
 app.post('/verify-and-unlock', async (req, res) => {
   const { txHash } = req.body ?? {};
@@ -171,14 +235,60 @@ app.post('/verify-and-unlock', async (req, res) => {
     saveUsedTxHashes();
     console.log(`検証OK: ${txHash}(送金額はCOST以上、GAME_WALLET宛のICHIGO送金を確認、${MIN_CONFIRMATIONS}confirmations以上)`);
 
-    // ESP32へは直接送らず、「解除待ち」フラグを立てるだけ。ESP32が次のポーリングで拾いに来る。
-    pendingUnlock = true;
+    // ESP32へは直接送らず、「解除待ち」を積むだけ。ESP32が次のポーリングで拾いに来る。
+    // 決済ページはこの後 /unlock-status?txHash=... をポーリングして、実際に
+    // ESP32が解除に成功するまで「支払い完了」を表示しない(送金だけ成立してロックが
+    // 開かない、という事故をユーザーに気づかせずに終わらせないため)。
+    unlockRequests.set(txHash, { status: 'pending', createdAt: Date.now() });
 
-    return res.json({ ok: true, queued: true });
+    return res.json({ ok: true, txHash });
   } catch (err) {
     console.error('verify-and-unlock処理中にエラー:', err);
     return res.status(500).json({ ok: false, error: 'サーバー内部エラー' });
   }
+});
+
+// モーター調整用: 角度と保持時間を指定して1回だけ動かすテストリクエストを積む。
+// 決済フローとは無関係の開発/調整用エンドポイントなので、送金検証は行わないが、
+// 誰でも実機を動かせてしまわないようESP32と同じ合言葉(X-Secret)で保護する。
+app.post('/test-move', (req, res) => {
+  if (!isValidEsp32Secret(req.get('X-Secret'))) {
+    return res.status(403).json({ ok: false, error: 'forbidden' });
+  }
+
+  const { angle, holdMs } = req.body ?? {};
+  if (
+    typeof angle !== 'number' || !Number.isFinite(angle) ||
+    angle < TEST_MOVE_MIN_ANGLE || angle > TEST_MOVE_MAX_ANGLE
+  ) {
+    return res.status(400).json({ ok: false, error: `angleは${TEST_MOVE_MIN_ANGLE}〜${TEST_MOVE_MAX_ANGLE}の数値で指定してください` });
+  }
+  if (
+    typeof holdMs !== 'number' || !Number.isFinite(holdMs) ||
+    holdMs < TEST_MOVE_MIN_HOLD_MS || holdMs > TEST_MOVE_MAX_HOLD_MS
+  ) {
+    return res.status(400).json({ ok: false, error: `holdMsは${TEST_MOVE_MIN_HOLD_MS}〜${TEST_MOVE_MAX_HOLD_MS}の数値で指定してください` });
+  }
+
+  sweepStaleTestMoveRequests();
+  const requestId = crypto.randomUUID();
+  testMoveRequests.set(requestId, {
+    status: 'pending',
+    angle: Math.round(angle),
+    holdMs: Math.round(holdMs),
+    createdAt: Date.now(),
+  });
+  return res.json({ ok: true, requestId });
+});
+
+// 決済ページと同様、テストページもポーリングで結果を確認する。
+// requestIdはランダムなUUIDで、これ単体を知られても実害はないため認証不要。
+app.get('/test-move-status', (req, res) => {
+  sweepStaleTestMoveRequests();
+  const { requestId } = req.query;
+  const request = testMoveRequests.get(requestId);
+  if (!request) return res.json({ status: 'unknown' });
+  return res.json({ status: request.status, failReason: request.failReason });
 });
 
 function isValidEsp32Secret(provided) {
@@ -191,15 +301,96 @@ function isValidEsp32Secret(provided) {
   return crypto.timingSafeEqual(a, b);
 }
 
-// ESP32が数秒おきに問い合わせてくるエンドポイント。解除待ちがあれば1回だけ通知して消費する。
+// ESP32が数秒おきに問い合わせてくるエンドポイント。解除待ち(pending)が1件でもあれば、
+// 一番古いものを1件だけdispatched状態にして返す(以後の実行結果は/unlock-resultで報告させる)。
 // 合言葉はURLではなくヘッダー(X-Secret)で受け取る(URLはログ等に残りやすいため)。
+// モーターのテスト動作も、解除待ちと同じ/poll-unlockの応答に相乗りさせて返す
+// (ESP32はHTTPSを数秒おきに繰り返すとヒープが減っていく問題を抱えているため、
+// テスト動作のためだけに別のポーリング先を増やしてHTTPSリクエスト回数を倍にしない)。
+function findPendingTestMove() {
+  for (const [requestId, request] of testMoveRequests) {
+    if (request.status === 'pending') return { requestId, request };
+  }
+  return null;
+}
+
 app.get('/poll-unlock', (req, res) => {
   if (!isValidEsp32Secret(req.get('X-Secret'))) {
     return res.status(403).json({ unlock: false, error: 'forbidden' });
   }
-  const unlock = pendingUnlock;
-  pendingUnlock = false;
-  return res.json({ unlock });
+  sweepStaleUnlockRequests();
+  sweepStaleTestMoveRequests();
+
+  let unlockPayload = { unlock: false };
+  for (const [txHash, request] of unlockRequests) {
+    if (request.status === 'pending') {
+      request.status = 'dispatched';
+      request.dispatchedAt = Date.now();
+      unlockPayload = { unlock: true, requestId: txHash };
+      break;
+    }
+  }
+
+  let testMovePayload = { testMove: false };
+  const pendingTestMove = findPendingTestMove();
+  if (pendingTestMove) {
+    pendingTestMove.request.status = 'dispatched';
+    pendingTestMove.request.dispatchedAt = Date.now();
+    testMovePayload = {
+      testMove: true,
+      testRequestId: pendingTestMove.requestId,
+      testAngle: pendingTestMove.request.angle,
+      testHoldMs: pendingTestMove.request.holdMs,
+    };
+  }
+
+  return res.json({ ...unlockPayload, ...testMovePayload });
+});
+
+// ESP32がサーボを実際に動かした後、その結果(成功/失敗)を報告してくるエンドポイント。
+// これが一定時間届かない場合はsweepStaleUnlockRequestsがタイムアウト扱いにする。
+app.post('/unlock-result', (req, res) => {
+  if (!isValidEsp32Secret(req.get('X-Secret'))) {
+    return res.status(403).json({ ok: false, error: 'forbidden' });
+  }
+  sweepStaleUnlockRequests();
+  const { requestId, success } = req.body ?? {};
+  const request = unlockRequests.get(requestId);
+  if (!request) {
+    // すでにタイムアウトでfailed扱いになった後の遅延到着、または不明なrequestId。実害はない。
+    return res.json({ ok: true, noted: false });
+  }
+  request.status = success ? 'unlocked' : 'failed';
+  if (!success) request.failReason = 'esp32-reported-failure';
+  console.log(`ESP32から解除結果の報告: ${requestId} -> ${request.status}`);
+  return res.json({ ok: true, noted: true });
+});
+
+// ESP32がテスト動作を実行した後、その結果(成功/失敗)を報告してくるエンドポイント。
+app.post('/test-move-result', (req, res) => {
+  if (!isValidEsp32Secret(req.get('X-Secret'))) {
+    return res.status(403).json({ ok: false, error: 'forbidden' });
+  }
+  sweepStaleTestMoveRequests();
+  const { requestId, success } = req.body ?? {};
+  const request = testMoveRequests.get(requestId);
+  if (!request) {
+    return res.json({ ok: true, noted: false });
+  }
+  request.status = success ? 'done' : 'failed';
+  if (!success) request.failReason = 'esp32-reported-failure';
+  console.log(`ESP32からテスト動作結果の報告: ${requestId} -> ${request.status}`);
+  return res.json({ ok: true, noted: true });
+});
+
+// 決済ページが「実際に解除されたか」を確認するためにポーリングするエンドポイント。
+// txHashは決済者本人が送金した取引のハッシュであり、これ単体を知られても実害はないため認証不要。
+app.get('/unlock-status', (req, res) => {
+  sweepStaleUnlockRequests();
+  const { txHash } = req.query;
+  const request = unlockRequests.get(txHash);
+  if (!request) return res.json({ status: 'unknown' });
+  return res.json({ status: request.status, failReason: request.failReason });
 });
 
 loadTokenDecimals()

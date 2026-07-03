@@ -50,6 +50,9 @@ $("costLabel").textContent = COST;
 // その日のブリッジ(トンネル)のURLを付けておけば、それを使って通知する。
 const BRIDGE_BASE = new URLSearchParams(location.search).get("bridge") || "";
 const VERIFY_URL = BRIDGE_BASE.replace(/\/$/, "") + "/verify-and-unlock";
+const UNLOCK_STATUS_URL = BRIDGE_BASE.replace(/\/$/, "") + "/unlock-status";
+const UNLOCK_POLL_MS = 1500;
+const UNLOCK_POLL_MAX_TRIES = 20; // 約30秒。ESP32側のタイムアウト(15秒)+余裕分
 
 let provider, signer, account, token, decimals = 18n;
 
@@ -86,6 +89,24 @@ async function refreshBalance() {
   const bal = await token.balanceOf(account);
   $("balanceLabel").textContent = ethers.formatUnits(bal, decimals) + " ICHIGO";
   return bal;
+}
+
+// 送金の検証がOKでも、ESP32が実際にサーボを動かして報告してくるまでは
+// 「支払い完了」を表示しない。ここで待たずに完了表示してしまうと、ESP32が
+// オフライン等で解除できなかった場合に、決済者が気づかないまま
+// (イチゴだけ取られてロックは開かない)終わってしまうため。
+async function waitForUnlock(txHash) {
+  for (let i = 0; i < UNLOCK_POLL_MAX_TRIES; i++) {
+    await new Promise((resolve) => setTimeout(resolve, UNLOCK_POLL_MS));
+    try {
+      const res = await fetch(`${UNLOCK_STATUS_URL}?txHash=${txHash}`);
+      const data = await res.json();
+      if (data.status === "unlocked" || data.status === "failed") return data.status;
+    } catch {
+      // ネットワークの瞬断はリトライで吸収する
+    }
+  }
+  return "timeout";
 }
 
 // MetaMask側でアカウントを切り替えた時に、ページ側も自動で追従する
@@ -142,7 +163,7 @@ $("payBtn").addEventListener("click", async () => {
     await refreshBalance();
 
     // 同一オリジン(相対パス)か、?bridge=で指定されたトンネルURLに通知し、実機を解除してもらう。
-    showStatus("送金確定。ガチャガチャのロックを解除しています…", "");
+    showStatus("送金確定。オンチェーンで検証しています…", "");
     const res = await fetch(VERIFY_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -150,11 +171,24 @@ $("payBtn").addEventListener("click", async () => {
     });
     const data = await res.json();
 
-    if (data.ok) {
-      // ESP32はポーリング方式なので、実際に解除されるまで数秒のタイムラグがある。
-      showStatus("支払い完了! まもなくガチャガチャのロックが解除されます", "ok");
+    if (!data.ok) {
+      showStatus("送金の確認に失敗しました: " + (data.error || "不明なエラー") + `\n(txHash: ${tx.hash})`, "err");
+      return;
+    }
+
+    // ここでは「確認OK」なだけで、ガチャガチャがまだ実際に解除されたとは限らない
+    // (ESP32がオフライン・通信エラーの可能性がある)。ESP32からの報告を待ってから表示する。
+    showStatus("検証OK。ガチャガチャの解除を確認しています…", "");
+    const unlockStatus = await waitForUnlock(tx.hash);
+
+    if (unlockStatus === "unlocked") {
+      showStatus("支払い完了! ガチャガチャのロックが解除されました。カプセルをお受け取りください", "ok");
     } else {
-      showStatus("送金の確認に失敗しました: " + (data.error || "不明なエラー"), "err");
+      const reason = unlockStatus === "timeout" ? "解除確認がタイムアウトしました" : "実機の解除に失敗しました";
+      showStatus(
+        `送金は完了していますが、${reason}。\nお手数ですが下記のtxHashをスタッフにお伝えください:\n${tx.hash}`,
+        "err"
+      );
     }
   } catch (err) {
     showStatus("エラー: " + (err.shortMessage || err.message || err), "err");
