@@ -432,8 +432,29 @@ void setup() {
   showIdleScreen();
 }
 
+// USBシリアル経由の手動テスト用コマンド。WiFi/bridge/HTTPを一切経由しないので、
+// 「bridge経由では成功と出るのに実際は動かない」ときの切り分けに使える
+// (attach()が成功=配線が正しい、を意味しないため。この関数まで来て動かなければ
+// GPIO/配線/電源/サーボ本体側の物理的な問題である可能性が高い)。
+// Arduino IDEのシリアルモニタで 'r' + Enter を送ると補充用サーボを開→閉と動かす。
+void handleSerialCommand() {
+  if (!Serial.available()) return;
+  char c = Serial.read();
+  if (c == 'r') {
+    Serial.print("[手動テスト] 補充用サーボ attached=");
+    Serial.println(refillServo.attached());
+    Serial.println("[手動テスト] 補充用サーボを開けます");
+    moveServoSmoothly(refillServo, refillServo.read(), REFILL_OPEN_ANGLE, REFILL_MOVE_MS);
+    delay(800);
+    Serial.println("[手動テスト] 補充用サーボを閉めます");
+    moveServoSmoothly(refillServo, REFILL_OPEN_ANGLE, REFILL_CLOSED_ANGLE, REFILL_MOVE_MS);
+    Serial.println("[手動テスト] 完了");
+  }
+}
+
 void loop() {
   ArduinoOTA.handle();
+  handleSerialCommand();
 
   if (millis() - lastPollAt >= POLL_INTERVAL_MS) {
     lastPollAt = millis();
