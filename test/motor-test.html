@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ICHIGO モーターテスト</title>
+<style>
+  :root { --pink: #ff6f91; }
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 1.4rem; }
+  label { display: block; font-weight: 600; margin-top: 20px; }
+  .muted { color: #888; font-size: .85rem; margin: 4px 0 0; }
+  .row { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+  input[type="range"] { flex: 1; }
+  input[type="number"], input[type="password"] { width: 90px; font-size: 1rem; padding: 6px 8px; border: 1px solid #ccc; border-radius: 8px; }
+  input[type="password"] { width: 100%; box-sizing: border-box; }
+  button { font-size: 1rem; padding: 10px 16px; border-radius: 10px; border: none; background: var(--pink); color: #fff; cursor: pointer; margin-top: 24px; }
+  button:disabled { background: #ccc; cursor: default; }
+  .ok { color: #1e8449; }
+  .err { color: #c0392b; white-space: pre-wrap; }
+  .busy { color: #888; }
+  .presets { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  .presets button { margin-top: 0; padding: 6px 10px; font-size: .85rem; background: #eee; color: #333; }
+</style>
+</head>
+<body>
+  <h1>ICHIGO モーターテスト</h1>
+  <p class="muted">
+    角度と保持時間(秒)を指定して実機のサーボを1回だけ動かせます。ちょうどいい解除角度・時間を探すためのページです。
+    動かした後は自動でロック角度(0度)に戻ります。
+  </p>
+
+  <label for="secret">合言葉(X-Secret)</label>
+  <input id="secret" type="password" placeholder="gachapon.inoのSHARED_SECRETと同じ文字列">
+  <p class="muted">ESP32・bridgeの設定と同じ合言葉を入力してください(ブラウザに保存されます)</p>
+
+  <label for="angle">角度: <span id="angleLabel">90</span>度</label>
+  <div class="row">
+    <input id="angleRange" type="range" min="0" max="180" step="1" value="90">
+    <input id="angleNumber" type="number" min="0" max="180" step="1" value="90">
+  </div>
+  <div class="presets">
+    <button type="button" data-angle="0">0(ロック位置)</button>
+    <button type="button" data-angle="90">90(現在の解除角度)</button>
+    <button type="button" data-angle="180">180</button>
+  </div>
+
+  <label for="duration">保持時間: <span id="durationLabel">0.4</span>秒</label>
+  <div class="row">
+    <input id="durationRange" type="range" min="0.05" max="3" step="0.05" value="0.4">
+    <input id="durationNumber" type="number" min="0.05" max="3" step="0.05" value="0.4">
+  </div>
+  <p class="muted">現在のコード上のデフォルトは0.4秒(400ms)です</p>
+
+  <button id="moveBtn">この設定で動かす</button>
+  <p id="status"></p>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+const secretInput = $("secret");
+const angleRange = $("angleRange");
+const angleNumber = $("angleNumber");
+const angleLabel = $("angleLabel");
+const durationRange = $("durationRange");
+const durationNumber = $("durationNumber");
+const durationLabel = $("durationLabel");
+const moveBtn = $("moveBtn");
+
+// 前回入力した値をブラウザに覚えさせておく(調整作業は何度も繰り返すため)
+secretInput.value = localStorage.getItem("ichigo_test_secret") || "";
+angleRange.value = angleNumber.value = angleLabel.textContent = localStorage.getItem("ichigo_test_angle") || 90;
+durationRange.value = durationNumber.value = durationLabel.textContent = localStorage.getItem("ichigo_test_duration") || 0.4;
+
+function syncAngle(value) {
+  angleRange.value = angleNumber.value = angleLabel.textContent = value;
+  localStorage.setItem("ichigo_test_angle", value);
+}
+function syncDuration(value) {
+  durationRange.value = durationNumber.value = durationLabel.textContent = value;
+  localStorage.setItem("ichigo_test_duration", value);
+}
+
+angleRange.addEventListener("input", () => syncAngle(angleRange.value));
+angleNumber.addEventListener("input", () => syncAngle(angleNumber.value));
+durationRange.addEventListener("input", () => syncDuration(durationRange.value));
+durationNumber.addEventListener("input", () => syncDuration(durationNumber.value));
+secretInput.addEventListener("input", () => localStorage.setItem("ichigo_test_secret", secretInput.value));
+
+document.querySelectorAll(".presets button").forEach((btn) => {
+  btn.addEventListener("click", () => syncAngle(btn.dataset.angle));
+});
+
+function showStatus(text, cls) {
+  $("status").textContent = text;
+  $("status").className = cls || "";
+}
+
+async function pollTestMoveStatus(requestId) {
+  const maxTries = 20; // 約20秒。bridge側のタイムアウト(10秒)+余裕分
+  for (let i = 0; i < maxTries; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      const res = await fetch(`/test-move-status?requestId=${requestId}`);
+      const data = await res.json();
+      if (data.status === "done" || data.status === "failed") return data.status;
+    } catch {
+      // ネットワークの瞬断はリトライで吸収する
+    }
+  }
+  return "timeout";
+}
+
+moveBtn.addEventListener("click", async () => {
+  const secret = secretInput.value.trim();
+  if (!secret) {
+    showStatus("合言葉(X-Secret)を入力してください", "err");
+    return;
+  }
+  const angle = Number(angleNumber.value);
+  const holdMs = Math.round(Number(durationNumber.value) * 1000);
+
+  moveBtn.disabled = true;
+  try {
+    showStatus("ESP32に予約を送信中…", "busy");
+    const res = await fetch("/test-move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Secret": secret },
+      body: JSON.stringify({ angle, holdMs }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      showStatus("予約に失敗しました: " + (data.error || "不明なエラー"), "err");
+      return;
+    }
+
+    showStatus("予約OK。ESP32が次のポーリングで拾うのを待っています…", "busy");
+    const status = await pollTestMoveStatus(data.requestId);
+    if (status === "done") {
+      showStatus(`実行完了! 角度${angle}度・${holdMs}msで動かしました`, "ok");
+    } else if (status === "failed") {
+      showStatus("ESP32側で失敗しました(サーボ未接続の可能性があります)", "err");
+    } else {
+      showStatus("タイムアウトしました。ESP32がオフライン、または合言葉が違う可能性があります", "err");
+    }
+  } catch (err) {
+    showStatus("エラー: " + (err.message || err), "err");
+  } finally {
+    moveBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
