@@ -65,8 +65,8 @@ const unsigned long POLL_INTERVAL_MS = 2000; // 何ms間隔でブリッジに問
 // ↑↑↑ ここまで ↑↑↑
 
 const int SERVO_PIN = 18;
-const int LOCK_ANGLE = 0;
-const int UNLOCK_ANGLE = 90;
+const int LOCK_ANGLE = 180; // 起動時・待機中の角度(サーボの初期位置)
+const int UNLOCK_ANGLE = 0; // 解除動作で一瞬向ける角度(その後LOCK_ANGLEに戻る)
 const int UNLOCK_HOLD_MS = 400;
 
 // このボードのOLEDは 128x64, I2Cアドレス0x3C, SDA=GPIO21/SCL=GPIO22(基板内蔵配線)
