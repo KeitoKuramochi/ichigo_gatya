@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ICHIGO ガチャガチャ AI店番</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"
+        integrity="sha512-f+t6//rz3Iy3hp1CiwtsigYtyWuGk7bf6xl2RTOPvmyMIfTQJ4iy6Lg1dah1bsLQ9SLideJGicgmOkBsBXP1aA=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<style>
+  :root { --pink: #ff6f91; }
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 1.4rem; }
+  button { font-size: 1rem; padding: 10px 16px; border-radius: 10px; border: none; background: var(--pink); color: #fff; cursor: pointer; }
+  button:disabled { background: #ccc; cursor: default; }
+  .balance { font-size: 1.6rem; font-weight: 700; color: var(--pink); }
+  .muted { color: #888; font-size: .85rem; }
+  .ok { color: #1e8449; }
+  .err { color: #c0392b; white-space: pre-wrap; }
+  .hidden { display: none; }
+  .chat { border: 1px solid #ddd; border-radius: 10px; padding: 10px; height: 300px; overflow-y: auto; margin: 12px 0; background: #fafafa; }
+  .bubble { max-width: 80%; margin: 6px 0; padding: 8px 12px; border-radius: 12px; font-size: .95rem; line-height: 1.4; white-space: pre-wrap; }
+  .bubble.user { margin-left: auto; background: var(--pink); color: #fff; }
+  .bubble.assistant { margin-right: auto; background: #eee; color: #222; }
+  .chatInputRow { display: flex; gap: 8px; margin-bottom: 8px; }
+  .chatInputRow input { flex: 1; font-size: 1rem; padding: 8px 10px; border-radius: 10px; border: 1px solid #ccc; }
+  .priceLine { font-size: 1.1rem; font-weight: 700; margin: 4px 0; }
+</style>
+</head>
+<body>
+  <h1>ICHIGO ガチャガチャ AI店番</h1>
+  <p class="muted">店番AIと少し話して、値段を決めてから支払います。</p>
+
+  <button id="connectBtn">① ウォレットを接続</button>
+  <p class="muted" id="account"></p>
+  <p class="balance" id="balanceLabel"></p>
+
+  <div id="disabledNotice" class="hidden">
+    <p class="err">現在、AI店番との交渉は利用できません。</p>
+    <p><a href="/">通常の決済ページはこちら</a></p>
+  </div>
+
+  <div id="chatSection" class="hidden">
+    <div class="chat" id="chat"></div>
+    <div class="chatInputRow">
+      <input id="chatInput" type="text" maxlength="500" placeholder="店番に話しかける…">
+      <button id="sendBtn">送る</button>
+    </div>
+    <button id="finalizeBtn">この価格で決める</button>
+    <p class="priceLine">現在の提示価格: <span id="priceLabel"></span> ICHIGO(<span id="turnLabel"></span>)</p>
+  </div>
+
+  <div id="paySection" class="hidden">
+    <p class="priceLine">確定価格: <span id="finalPriceLabel"></span> ICHIGO</p>
+    <button id="payBtn">② 支払ってガチャを回す</button>
+  </div>
+
+  <p id="status"></p>
+
+<script type="module">
+const OP_CHAIN_ID = 10;
+const TOKEN_ADDR = "0x836700463Dce76D9Cc3CDf6F6EDF946312c01869";
+const GAME_WALLET = "0x70775B1d24176De0fda2776303B8a603C671cFFb"; // 授業のDiscord IDに紐づく自分のウォレット
+const ERC20_ABI = [
+  "function balanceOf(address) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+  "function transfer(address to, uint256 amount) returns (bool)",
+];
+const UNLOCK_POLL_MS = 1500;
+const UNLOCK_POLL_MAX_TRIES = 20; // 約30秒。ESP32側のタイムアウト(15秒)+余裕分
+
+const $ = (id) => document.getElementById(id);
+
+let provider, signer, account, token, decimals = 18n;
+let sessionId = null;
+let finalPrice = null;
+
+function showStatus(text, cls) {
+  $("status").textContent = text;
+  $("status").className = cls || "";
+}
+
+function appendBubble(role, content) {
+  const div = document.createElement("div");
+  div.className = `bubble ${role === "user" ? "user" : "assistant"}`;
+  div.textContent = content;
+  $("chat").appendChild(div);
+  $("chat").scrollTop = $("chat").scrollHeight;
+  return div; // 送信失敗時にこの吹き出しを取り消せるようにするため、要素を返す
+}
+
+function renderTranscript(transcript) {
+  $("chat").innerHTML = "";
+  for (const m of transcript) appendBubble(m.role, m.content);
+}
+
+function setNegotiationUiState(price, turn, maxTurn) {
+  $("priceLabel").textContent = price;
+  $("turnLabel").textContent = `${turn}/${maxTurn}ターン`;
+}
+
+function enterPaymentPhase(price) {
+  finalPrice = price;
+  $("chatSection").classList.add("hidden");
+  $("finalPriceLabel").textContent = finalPrice;
+  $("paySection").classList.remove("hidden");
+}
+
+async function ensureOptimism() {
+  const hexId = "0x" + OP_CHAIN_ID.toString(16);
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hexId }] });
+    return true;
+  } catch (err) {
+    if (err.code === 4902) {
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: hexId,
+          chainName: "Optimism",
+          nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+          rpcUrls: ["https://mainnet.optimism.io"],
+          blockExplorerUrls: ["https://optimistic.etherscan.io"],
+        }],
+      });
+      return true;
+    }
+    showStatus("Optimismネットワークへの切り替えに失敗しました: " + (err.message || err), "err");
+    return false;
+  }
+}
+
+async function refreshBalance() {
+  const bal = await token.balanceOf(account);
+  $("balanceLabel").textContent = ethers.formatUnits(bal, decimals) + " ICHIGO";
+  return bal;
+}
+
+async function waitForUnlock(txHash) {
+  for (let i = 0; i < UNLOCK_POLL_MAX_TRIES; i++) {
+    await new Promise((resolve) => setTimeout(resolve, UNLOCK_POLL_MS));
+    try {
+      const res = await fetch(`/unlock-status?txHash=${txHash}`);
+      const data = await res.json();
+      if (data.status === "unlocked" || data.status === "failed") return data.status;
+    } catch {
+      // ネットワークの瞬断はリトライで吸収する
+    }
+  }
+  return "timeout";
+}
+
+if (window.ethereum) {
+  window.ethereum.on("accountsChanged", (accounts) => {
+    if (!accounts.length || !signer) return; // まだ接続前なら何もしない
+    // sessionId・チャット/支払いUIの状態、tokenコントラクトの署名者(古いsignerを参照し続ける)を
+    // 個別に直すより、ページを再読み込みして最初からやり直してもらう方が確実(このページの
+    // 複雑さに対して十分な対応)。
+    location.reload();
+  });
+}
+
+async function startNegotiation() {
+  let res;
+  try {
+    res = await fetch("/negotiate-start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wallet: account }),
+    });
+  } catch (err) {
+    showStatus("交渉開始に失敗しました: " + (err.message || err), "err");
+    return;
+  }
+
+  if (res.status === 404) {
+    $("disabledNotice").classList.remove("hidden");
+    return;
+  }
+
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    showStatus("交渉開始の応答を読み取れませんでした", "err");
+    return;
+  }
+
+  if (!data.ok) {
+    showStatus(data.error || "交渉を開始できませんでした", "err");
+    return;
+  }
+
+  sessionId = data.sessionId;
+  renderTranscript(data.transcript);
+  setNegotiationUiState(data.price, data.turn, data.maxTurn);
+
+  if (data.status === "awaiting-payment") {
+    enterPaymentPhase(data.price);
+  } else {
+    $("chatSection").classList.remove("hidden");
+  }
+}
+
+async function sendChatMessage(message) {
+  const userBubble = appendBubble("user", message);
+  $("sendBtn").disabled = true;
+  $("finalizeBtn").disabled = true; // 送信結果が返るまでは「この価格で決める」も待たせる(server.js側のbusyロックと二重で守る)
+  try {
+    const res = await fetch("/negotiate-message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, message }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      // サーバー側には記録されていないので、表示だけ先行していた発言を引っ込めて
+      // 入力欄に戻す(見た目だけ送信済みで実際は送られていない、という不整合を防ぐ)。
+      userBubble.remove();
+      $("chatInput").value = message;
+      showStatus(data.error || "送信に失敗しました", "err");
+      return;
+    }
+    appendBubble("assistant", data.reply);
+    setNegotiationUiState(data.price, data.turn, data.maxTurn);
+    if (data.done) enterPaymentPhase(data.price);
+  } catch (err) {
+    userBubble.remove();
+    $("chatInput").value = message;
+    showStatus("送信に失敗しました: " + (err.message || err), "err");
+  } finally {
+    $("sendBtn").disabled = false;
+    $("finalizeBtn").disabled = false;
+  }
+}
+
+$("connectBtn").addEventListener("click", async () => {
+  if (!window.ethereum) {
+    showStatus("ウォレットが見つかりません。MetaMaskアプリ内のブラウザでこのページを開いてください", "err");
+    return;
+  }
+  try {
+    if (!(await ensureOptimism())) return;
+    provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    signer = await provider.getSigner();
+    account = await signer.getAddress();
+    token = new ethers.Contract(TOKEN_ADDR, ERC20_ABI, signer);
+    decimals = await token.decimals();
+
+    $("account").textContent = account;
+    await refreshBalance();
+    $("connectBtn").disabled = true;
+    showStatus("", "");
+
+    await startNegotiation();
+  } catch (err) {
+    showStatus("接続エラー: " + (err.shortMessage || err.message || err), "err");
+  }
+});
+
+$("sendBtn").addEventListener("click", () => {
+  const input = $("chatInput");
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = "";
+  sendChatMessage(message);
+});
+$("chatInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") $("sendBtn").click();
+});
+
+$("finalizeBtn").addEventListener("click", async () => {
+  $("sendBtn").disabled = true;
+  $("finalizeBtn").disabled = true;
+  try {
+    const res = await fetch("/negotiate-finalize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      showStatus(data.error || "確定できませんでした", "err");
+      return;
+    }
+    enterPaymentPhase(data.price);
+  } catch (err) {
+    showStatus("確定に失敗しました: " + (err.message || err), "err");
+  } finally {
+    $("sendBtn").disabled = false;
+    $("finalizeBtn").disabled = false;
+  }
+});
+
+$("payBtn").addEventListener("click", async () => {
+  const btn = $("payBtn");
+  try {
+    btn.disabled = true;
+    const amount = ethers.parseUnits(String(finalPrice), decimals);
+    const bal = await refreshBalance();
+    if (bal < amount) {
+      showStatus(`イチゴが足りません(必要: ${finalPrice})`, "err");
+      return;
+    }
+
+    showStatus("MetaMaskで送金を承認してください…", "");
+    const tx = await token.transfer(GAME_WALLET, amount);
+
+    showStatus("送金を確認中…(数秒)", "");
+    await tx.wait();
+    await refreshBalance();
+
+    showStatus("送金確定。オンチェーンで検証しています…", "");
+    const res = await fetch("/verify-and-unlock", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ txHash: tx.hash, sessionId }),
+    });
+    const data = await res.json();
+
+    if (!data.ok) {
+      showStatus("送金の確認に失敗しました: " + (data.error || "不明なエラー") + `\n(txHash: ${tx.hash})`, "err");
+      return;
+    }
+
+    showStatus("検証OK。ガチャガチャの解除を確認しています…", "");
+    const unlockStatus = await waitForUnlock(tx.hash);
+
+    if (unlockStatus === "unlocked") {
+      showStatus("支払い完了! ガチャガチャのロックが解除されました。カプセルをお受け取りください", "ok");
+    } else {
+      const reason = unlockStatus === "timeout" ? "解除確認がタイムアウトしました" : "実機の解除に失敗しました";
+      showStatus(
+        `送金は完了していますが、${reason}。\nお手数ですが下記のtxHashをスタッフにお伝えください:\n${tx.hash}`,
+        "err"
+      );
+    }
+  } catch (err) {
+    showStatus("エラー: " + (err.shortMessage || err.message || err), "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

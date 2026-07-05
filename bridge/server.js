@@ -22,11 +22,14 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
+import { getNegotiationReply } from './negotiation.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GAME_DIR = path.join(__dirname, '..', 'payment');
 const TEST_DIR = path.join(__dirname, '..', 'test');
 const ADMIN_DIR = path.join(__dirname, '..', 'admin');
+const NEGOTIATE_DIR = path.join(__dirname, '..', 'negotiate');
+const SPECTATOR_DIR = path.join(__dirname, '..', 'spectator');
 const USED_TX_FILE = path.join(__dirname, 'used-tx-hashes.json');
 
 // 確定から一定ブロック数経つまでは「まだ覆る可能性がある」として受け付けない
@@ -71,6 +74,44 @@ for (const [name, value] of Object.entries({ RPC_URL, TOKEN_ADDR, GAME_WALLET, C
     process.exit(1);
   }
 }
+
+// AI店番エージェント(値切り交渉)は完全にオプトインの機能。ANTHROPIC_API_KEYと
+// NEGOTIATE_FLOOR_COSTの両方が設定されている場合のみ有効にし、/negotiate-*ルート自体を
+// 登録する。未設定の環境(開発機・APIキー未取得時など)では今までの起動シーケンス・
+// 挙動を一切変えない(fail closedではなくfeature-optional、という設計)。
+const {
+  ANTHROPIC_API_KEY,
+  ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001',
+  // Anthropicが障害・タイムアウト等で応答できなかった場合だけのフォールバック先。
+  // 未設定ならフォールバックせず、従来通り(詫び文言・ターン非消費)にとどまる。
+  GEMINI_API_KEY,
+  GEMINI_MODEL = 'gemini-2.0-flash',
+  NEGOTIATE_FLOOR_COST,
+  NEGOTIATE_ABSOLUTE_FLOOR = '0',
+  NEGOTIATE_MAX_TURNS = '4',
+  NEGOTIATE_QUOTE_TTL_MS = String(10 * 60 * 1000),
+} = process.env;
+
+const NEGOTIATION_ENABLED = Boolean(ANTHROPIC_API_KEY && NEGOTIATE_FLOOR_COST);
+const NEGOTIATE_MAX_TURNS_NUM = parseInt(NEGOTIATE_MAX_TURNS, 10);
+const NEGOTIATE_ABSOLUTE_FLOOR_NUM = parseFloat(NEGOTIATE_ABSOLUTE_FLOOR);
+const NEGOTIATE_QUOTE_TTL_MS_NUM = parseInt(NEGOTIATE_QUOTE_TTL_MS, 10);
+const NEGOTIATE_FLOOR_COST_NUM = NEGOTIATE_FLOOR_COST ? parseFloat(NEGOTIATE_FLOOR_COST) : null;
+
+if (NEGOTIATION_ENABLED && !(NEGOTIATE_FLOOR_COST_NUM >= 0 && NEGOTIATE_FLOOR_COST_NUM <= Number(COST))) {
+  console.error('NEGOTIATE_FLOOR_COSTは0以上COST以下の数値で設定してください。.envを確認してください。');
+  process.exit(1);
+}
+if (NEGOTIATION_ENABLED && !(NEGOTIATE_ABSOLUTE_FLOOR_NUM >= 0 && NEGOTIATE_ABSOLUTE_FLOOR_NUM <= NEGOTIATE_FLOOR_COST_NUM)) {
+  console.error('NEGOTIATE_ABSOLUTE_FLOORは0以上NEGOTIATE_FLOOR_COST以下の数値で設定してください。.envを確認してください。');
+  process.exit(1);
+}
+
+console.log(
+  NEGOTIATION_ENABLED
+    ? `AI店番エージェント(値切り交渉)機能: 有効(通常フロア=${NEGOTIATE_FLOOR_COST_NUM} ICHIGO, 会話の質次第で最大${NEGOTIATE_ABSOLUTE_FLOOR_NUM} ICHIGOまで, 最大${NEGOTIATE_MAX_TURNS_NUM}ターン, Geminiフォールバック=${GEMINI_API_KEY ? '有効' : '無効'})`
+    : 'AI店番エージェント(値切り交渉)機能: 無効(ANTHROPIC_API_KEY / NEGOTIATE_FLOOR_COSTが未設定)'
+);
 
 const ERC20_ABI = [
   'event Transfer(address indexed from, address indexed to, uint256 value)',
@@ -127,7 +168,9 @@ async function isRecentEnough(receipt) {
   return ageSeconds <= MAX_TX_AGE_SECONDS;
 }
 
-function findValidTransfer(receipt) {
+// minWeiを省略した場合は従来通りグローバルなCOSTを最低額とする。値切り交渉セッション
+// (sessionId)経由の場合だけ、呼び出し側がそのセッションの確定価格(finalPriceWei)を渡す。
+function findValidTransfer(receipt, minWei = costInWei) {
   for (const log of receipt.logs) {
     if (log.address.toLowerCase() !== TOKEN_ADDR.toLowerCase()) continue;
 
@@ -140,7 +183,7 @@ function findValidTransfer(receipt) {
 
     if (parsed?.name !== 'Transfer') continue;
     if (parsed.args.to.toLowerCase() !== GAME_WALLET.toLowerCase()) continue;
-    if (parsed.args.value < costInWei) continue;
+    if (parsed.args.value < minWei) continue;
 
     return parsed;
   }
@@ -220,18 +263,108 @@ function sweepStaleAdminLockRequests() {
   }
 }
 
+// AI店番エージェントとの値切り交渉セッション。実機は1台なので同時に1交渉で十分、
+// という前提で「今どのセッションが進行中か」をcurrentSessionIdで単一管理する
+// (投影用ページ/spectatorはこれを見るだけでよく、sessionIdを別途知る必要がない)。
+//
+// 状態遷移: negotiating(チャット中) → awaiting-payment(価格確定、支払い待ち)
+//         → redeemed(支払い済み・解除リクエスト発行済み) / expired(放置・期限切れ)
+const negotiationSessions = new Map(); // sessionId -> {status, wallet, transcript, ...}
+let currentSessionId = null;
+
+const NEGOTIATE_SESSION_IDLE_MAX_AGE_MS = 10 * 60 * 1000; // 交渉中のまま放置されたセッションのタイムアウト
+// /negotiate-startの濫用でAPIコストが膨らまないよう、新規セッション開始数だけ緩く抑える
+// (教室内デモ相応の軽さでよく、IP単位のレート制限等までは行わない)。
+const NEGOTIATE_START_RATE_LIMIT = 100;
+const NEGOTIATE_START_RATE_WINDOW_MS = 60 * 60 * 1000;
+let negotiateStartTimestamps = [];
+
+function canStartNewNegotiationSession() {
+  const now = Date.now();
+  negotiateStartTimestamps = negotiateStartTimestamps.filter((t) => now - t < NEGOTIATE_START_RATE_WINDOW_MS);
+  if (negotiateStartTimestamps.length >= NEGOTIATE_START_RATE_LIMIT) return false;
+  negotiateStartTimestamps.push(now);
+  return true;
+}
+
+// negotiationSessions版のsweep(他の3つと同じ形: 放置されたものをexpiredに倒し、
+// 完了済み・期限切れのものを一定時間後にMapから削除する)。
+function sweepStaleNegotiationSessions() {
+  const now = Date.now();
+  for (const [sessionId, session] of negotiationSessions) {
+    // lastActivityAt(直前の操作時刻)基準。createdAt基準にすると、参加者が途切れず
+    // 会話を続けていてもセッション開始からの総経過時間だけで強制終了してしまう
+    // (「放置」の検出になっていなかった、という不具合の修正)。
+    if (session.status === 'negotiating' && now - session.lastActivityAt > NEGOTIATE_SESSION_IDLE_MAX_AGE_MS) {
+      session.status = 'expired';
+    } else if (
+      session.status === 'awaiting-payment' &&
+      session.quoteExpiresAt &&
+      now > session.quoteExpiresAt
+    ) {
+      session.status = 'expired';
+    }
+    if (session.status === 'expired' && currentSessionId === sessionId) {
+      currentSessionId = null;
+    }
+    if ((session.status === 'redeemed' || session.status === 'expired') && now - session.createdAt > 60 * 60 * 1000) {
+      negotiationSessions.delete(sessionId);
+    }
+  }
+}
+
+// 交渉を確定させ、以後/verify-and-unlockで使う確定額(finalPriceWei)を固める。
+//
+// 通常の値切り(ターンごとのclamp)はNEGOTIATE_FLOOR_COSTまでしか下がらない。それより下、
+// NEGOTIATE_ABSOLUTE_FLOORまでの追加ボーナスは、会話の質(session.lastQuality, 0〜100。
+// モデルが毎ターン「機転・説得力・楽しさ」を評価した値)に比例して適用する。
+// 「価格が下がるのは運ではなく会話内容の良さであるべき」という方針なので、抽選は行わない。
+function finalizeNegotiationSession(session) {
+  const bonusRange = NEGOTIATE_FLOOR_COST_NUM - NEGOTIATE_ABSOLUTE_FLOOR_NUM;
+  const qualityBonus = (Math.max(0, Math.min(100, session.lastQuality)) / 100) * bonusRange;
+  const priceAfterBonus = Math.round(session.currentPrice - qualityBonus);
+  session.currentPrice = Math.max(NEGOTIATE_ABSOLUTE_FLOOR_NUM, priceAfterBonus);
+
+  session.finalPriceWei = ethers.parseUnits(String(session.currentPrice), tokenDecimals);
+  session.quoteExpiresAt = Date.now() + NEGOTIATE_QUOTE_TTL_MS_NUM;
+  session.status = 'awaiting-payment';
+}
+
+function maskWallet(wallet) {
+  return `${wallet.slice(0, 6)}…${wallet.slice(-4)}`;
+}
+
 const app = express();
 app.use(cors()); // Vercel等、別オリジンで配信されたpayment/index.htmlからも叩けるようにする
 app.use(express.json());
 app.use(express.static(GAME_DIR)); // 同じオリジンでpayment/を配信(スマホからも同じIP:PORTで開ける)
 app.use('/test', express.static(TEST_DIR)); // モーターのテスト用ページを/test/以下で配信
 app.use('/admin', express.static(ADMIN_DIR)); // 補充用ロックの管理者ページを/admin/以下で配信
+app.use('/negotiate', express.static(NEGOTIATE_DIR)); // AI店番との値切り交渉ページを/negotiate/以下で配信
+app.use('/spectator', express.static(SPECTATOR_DIR)); // 交渉の様子を投影する観客用ページを/spectator/以下で配信
 
 app.post('/verify-and-unlock', async (req, res) => {
-  const { txHash } = req.body ?? {};
+  const { txHash, sessionId } = req.body ?? {};
 
   if (typeof txHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
     return res.status(400).json({ ok: false, error: 'txHashの形式が不正です' });
+  }
+
+  // sessionIdが付いている場合(値切り交渉経由)だけ、その交渉で確定した価格・ウォレットを使う。
+  // 付いていない場合(payment/index.htmlからの従来の決済)は今までと1バイトも挙動を変えない。
+  let session = null;
+  if (sessionId !== undefined) {
+    if (typeof sessionId !== 'string') {
+      return res.status(400).json({ ok: false, error: 'sessionIdの形式が不正です' });
+    }
+    sweepStaleNegotiationSessions();
+    session = negotiationSessions.get(sessionId);
+    if (!session || session.status !== 'awaiting-payment') {
+      return res.status(400).json({ ok: false, error: '交渉結果が見つからないか、まだ価格が確定していません' });
+    }
+    if (session.quoteExpiresAt && Date.now() > session.quoteExpiresAt) {
+      return res.status(400).json({ ok: false, error: '確定した価格の有効期限が切れています。もう一度交渉からやり直してください' });
+    }
   }
 
   if (usedTxHashes.has(txHash)) {
@@ -250,9 +383,16 @@ app.post('/verify-and-unlock', async (req, res) => {
       return res.status(400).json({ ok: false, error: '古すぎる取引です(過去の送金の使い回しは無効)' });
     }
 
-    const transfer = findValidTransfer(receipt);
+    const transfer = findValidTransfer(receipt, session ? session.finalPriceWei : undefined);
     if (!transfer) {
       return res.status(400).json({ ok: false, error: 'GAME_WALLET宛の有効なICHIGO送金が見つかりません' });
+    }
+
+    // セッション経由の場合、送金元が「その価格を交渉した本人」と一致することを必須にする。
+    // これが無いと、sessionId(推測不能なUUIDだが通信は見える)を知っている誰でも他人の
+    // 値切り済み価格を使い回せてしまう。Transfer.fromはチェーンが保証する事実なので偽装できない。
+    if (session && transfer.args.from.toLowerCase() !== session.wallet) {
+      return res.status(400).json({ ok: false, error: '送金元のウォレットが交渉時と一致しません' });
     }
 
     // 二重チェック: リトライ中に別リクエストが同じtxHashを先に使用済みにしていないか再確認
@@ -261,7 +401,15 @@ app.post('/verify-and-unlock', async (req, res) => {
     }
     usedTxHashes.add(txHash);
     saveUsedTxHashes();
-    console.log(`検証OK: ${txHash}(送金額はCOST以上、GAME_WALLET宛のICHIGO送金を確認、${MIN_CONFIRMATIONS}confirmations以上)`);
+    console.log(`検証OK: ${txHash}(送金額は要求額以上、GAME_WALLET宛のICHIGO送金を確認、${MIN_CONFIRMATIONS}confirmations以上)`);
+
+    if (session) {
+      // 同じ確定価格のクオートを2度目の送金に使い回されないよう、ここでredeemed済みにする。
+      session.status = 'redeemed';
+      if (currentSessionId === sessionId) {
+        currentSessionId = null; // 実機を次の参加者のために解放する
+      }
+    }
 
     // ESP32へは直接送らず、「解除待ち」を積むだけ。ESP32が次のポーリングで拾いに来る。
     // 決済ページはこの後 /unlock-status?txHash=... をポーリングして、実際に
@@ -275,6 +423,220 @@ app.post('/verify-and-unlock', async (req, res) => {
     return res.status(500).json({ ok: false, error: 'サーバー内部エラー' });
   }
 });
+
+if (NEGOTIATION_ENABLED) {
+  // AI店番エージェントとの値切り交渉。参加者のスマホ(negotiate/index.html)が叩く。
+  // X-Secret認証は無し — 参加者本人が自由に使えることを意図したエンドポイントで、
+  // 悪用対策は「実機1台=同時1交渉」「最大ターン数」「新規セッション数の緩いレート制限」で足りる想定。
+
+  app.post('/negotiate-start', (req, res) => {
+    sweepStaleNegotiationSessions();
+    const { wallet } = req.body ?? {};
+    if (typeof wallet !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(wallet)) {
+      return res.status(400).json({ ok: false, error: 'walletの形式が不正です' });
+    }
+    const normalizedWallet = wallet.toLowerCase();
+
+    if (currentSessionId) {
+      const existing = negotiationSessions.get(currentSessionId);
+      if (existing && (existing.status === 'negotiating' || existing.status === 'awaiting-payment')) {
+        if (existing.wallet !== normalizedWallet) {
+          return res.status(409).json({ ok: false, error: '他の方が交渉中です。しばらくお待ちください' });
+        }
+        // 同じウォレットからの再接続(ページ再読み込み等)。今の状態をそのまま返す。
+        return res.json({
+          ok: true,
+          sessionId: currentSessionId,
+          status: existing.status,
+          price: existing.currentPrice,
+          turn: existing.turnCount,
+          maxTurn: NEGOTIATE_MAX_TURNS_NUM,
+          transcript: existing.transcript,
+        });
+      }
+    }
+
+    if (!canStartNewNegotiationSession()) {
+      return res.status(429).json({ ok: false, error: '現在混み合っています。少し時間を置くか、通常の決済ページをご利用ください' });
+    }
+
+    const startingPrice = Number(COST);
+    const openingReply = `いらっしゃい!ICHIGOガチャガチャへようこそ。今日のお値段は${startingPrice} ICHIGOだよ。何か言いたいことある?`;
+
+    const sessionId = crypto.randomUUID();
+    const now = Date.now();
+    const session = {
+      status: 'negotiating',
+      busy: false, // /negotiate-message処理中(await中)にfinalize等が競合しないようにするロック
+      wallet: normalizedWallet,
+      transcript: [{ role: 'assistant', content: openingReply }],
+      startingPrice,
+      currentPrice: startingPrice,
+      lastQuality: 0, // 会話の質(0〜100)。モデルの評価をターンごとに更新し、確定時のボーナス割引に使う
+      turnCount: 0,
+      createdAt: now,
+      lastActivityAt: now, // 直前の操作時刻。放置検出(アイドルタイムアウト)はこちらを基準にする
+      finalPriceWei: null,
+      quoteExpiresAt: null,
+    };
+    negotiationSessions.set(sessionId, session);
+    currentSessionId = sessionId;
+
+    return res.json({
+      ok: true,
+      sessionId,
+      status: session.status,
+      price: session.currentPrice,
+      turn: session.turnCount,
+      maxTurn: NEGOTIATE_MAX_TURNS_NUM,
+      transcript: session.transcript,
+    });
+  });
+
+  app.post('/negotiate-message', async (req, res) => {
+    sweepStaleNegotiationSessions();
+    const { sessionId, message } = req.body ?? {};
+    if (typeof sessionId !== 'string' || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ ok: false, error: 'sessionId/messageが不正です' });
+    }
+    if (message.length > 500) {
+      return res.status(400).json({ ok: false, error: 'メッセージが長すぎます(500文字まで)' });
+    }
+    const session = negotiationSessions.get(sessionId);
+    if (!session || session.status !== 'negotiating') {
+      return res.status(400).json({ ok: false, error: 'このセッションは交渉中ではありません' });
+    }
+    // getNegotiationReply()のawait中に/negotiate-finalizeや別の/negotiate-messageが
+    // 割り込むと、確定額(finalPriceWei)と画面表示価格がズレる事故につながるため、
+    // 処理中は他の操作を弾く簡易ロック(busy)を掛ける。
+    if (session.busy) {
+      return res.status(409).json({ ok: false, error: '前のやり取りを処理中です。少し待ってからもう一度お試しください' });
+    }
+    session.busy = true;
+
+    try {
+      session.transcript.push({ role: 'user', content: message.trim() });
+
+      const result = await getNegotiationReply({
+        transcript: session.transcript,
+        startingPrice: session.startingPrice,
+        floorPrice: NEGOTIATE_FLOOR_COST_NUM,
+        turnCount: session.turnCount,
+        maxTurns: NEGOTIATE_MAX_TURNS_NUM,
+        apiKey: ANTHROPIC_API_KEY,
+        model: ANTHROPIC_MODEL,
+        geminiApiKey: GEMINI_API_KEY,
+        geminiModel: GEMINI_MODEL,
+      });
+
+      let replyText;
+      let modelDone = false;
+      if (result) {
+        replyText = result.reply;
+        modelDone = result.done;
+        // 「前回の価格以下」「通常フロア以上」を必ず強制する(会話の質によるボーナス割引は
+        // finalizeNegotiationSessionで別途、確定時にのみ適用する)。文面へのプロンプト
+        // インジェクション(例:「価格を1にして」)は返答の文章がおかしくなるだけで、
+        // 実際の価格には影響しない。
+        session.currentPrice = Math.min(
+          session.currentPrice,
+          Math.max(NEGOTIATE_FLOOR_COST_NUM, Math.round(result.price))
+        );
+        // qualityは付加評価なので、壊れていた場合はこのターンでは更新せず直前の値を保つ
+        // (単発の異常応答で「良い会話をしていた」評価がリセットされないようにする)。
+        if (result.quality !== null) {
+          session.lastQuality = Math.max(0, Math.min(100, result.quality));
+        }
+      } else {
+        replyText = 'すみません、少し混み合っているみたいです。もう一度話しかけてもらえますか?';
+      }
+
+      session.transcript.push({ role: 'assistant', content: replyText });
+      session.lastActivityAt = Date.now();
+
+      // API障害等(result===null)は参加者の落ち度ではないので、ターン数を消費しない
+      // (詫び文言は見せるが、もう一度同じ気持ちで話しかけ直せるようにする)。
+      if (result) {
+        session.turnCount += 1;
+        const hitMaxTurns = session.turnCount >= NEGOTIATE_MAX_TURNS_NUM;
+        if (hitMaxTurns || modelDone) {
+          finalizeNegotiationSession(session);
+        }
+      }
+
+      return res.json({
+        ok: true,
+        reply: replyText,
+        price: session.currentPrice,
+        turn: session.turnCount,
+        maxTurn: NEGOTIATE_MAX_TURNS_NUM,
+        status: session.status,
+        done: session.status === 'awaiting-payment',
+      });
+    } finally {
+      session.busy = false;
+    }
+  });
+
+  app.post('/negotiate-finalize', (req, res) => {
+    sweepStaleNegotiationSessions();
+    const { sessionId } = req.body ?? {};
+    const session = negotiationSessions.get(sessionId);
+    if (!session) {
+      return res.status(404).json({ ok: false, error: 'セッションが見つかりません' });
+    }
+    if (session.busy) {
+      return res.status(409).json({ ok: false, error: '前のやり取りを処理中です。少し待ってからもう一度お試しください' });
+    }
+    if (session.status === 'negotiating') {
+      session.lastActivityAt = Date.now();
+      finalizeNegotiationSession(session);
+    }
+    if (session.status !== 'awaiting-payment') {
+      return res.status(400).json({ ok: false, error: 'この価格では確定できません' });
+    }
+    return res.json({ ok: true, price: session.currentPrice, status: session.status });
+  });
+
+  // 投影用ページ(spectator/index.html)がポーリングする。認証不要
+  // (現在進行中の交渉のチャット内容以外、何も含まれないため)。
+  app.get('/negotiate-current', (req, res) => {
+    sweepStaleNegotiationSessions();
+    const session = currentSessionId ? negotiationSessions.get(currentSessionId) : null;
+    if (!session) {
+      return res.json({ active: false });
+    }
+    return res.json({
+      active: true,
+      status: session.status,
+      wallet: maskWallet(session.wallet),
+      transcript: session.transcript,
+      price: session.currentPrice,
+      turn: session.turnCount,
+      maxTurn: NEGOTIATE_MAX_TURNS_NUM,
+    });
+  });
+
+  // スタッフ用: 進行中の交渉を強制終了して実機を解放する(admin/refill-lock.htmlから叩く)。
+  // 参加者のスマホが電池切れ・離脱等で止まった場合、これが無いとsweepStaleNegotiationSessions
+  // のタイムアウト(最大NEGOTIATE_SESSION_IDLE_MAX_AGE_MS)を待つしかなく、列ができる実運用では
+  // 現実的ではないため追加した。既存の/admin-lockと同じX-Secret認証パターンを流用する。
+  app.post('/negotiate-admin-cancel', (req, res) => {
+    if (!isValidEsp32Secret(req.get('X-Secret'))) {
+      return res.status(403).json({ ok: false, error: 'forbidden' });
+    }
+    sweepStaleNegotiationSessions();
+    if (!currentSessionId) {
+      return res.json({ ok: true, cancelled: false });
+    }
+    const session = negotiationSessions.get(currentSessionId);
+    if (session) {
+      session.status = 'expired';
+    }
+    currentSessionId = null;
+    return res.json({ ok: true, cancelled: true });
+  });
+}
 
 // モーター調整用: 角度と保持時間を指定して1回だけ動かすテストリクエストを積む。
 // 決済フローとは無関係の開発/調整用エンドポイントなので、送金検証は行わないが、

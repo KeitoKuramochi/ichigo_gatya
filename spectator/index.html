@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ICHIGO ガチャガチャ AI店番 - 投影用</title>
+<style>
+  :root { --pink: #ff6f91; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #111; color: #eee; }
+  h1 { font-size: 2rem; margin: 0 0 4px; }
+  .muted { color: #aaa; font-size: 1.1rem; }
+  .idle { text-align: center; margin-top: 20vh; }
+  .idle h2 { font-size: 2.2rem; color: var(--pink); }
+  .priceLine { font-size: 2.2rem; font-weight: 700; color: var(--pink); margin: 8px 0; }
+  .turnLine { font-size: 1.3rem; color: #aaa; }
+  .chat { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
+  .bubble { max-width: 70%; padding: 14px 18px; border-radius: 16px; font-size: 1.4rem; line-height: 1.5; white-space: pre-wrap; }
+  .bubble.user { margin-left: auto; background: var(--pink); color: #fff; }
+  .bubble.assistant { margin-right: auto; background: #2a2a2a; color: #eee; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+  <div id="idleView" class="idle">
+    <h2>ICHIGO ガチャガチャ AI店番</h2>
+    <p class="muted">QRコードをスキャンして交渉を始めてください</p>
+  </div>
+
+  <div id="activeView" class="hidden">
+    <h1>AI店番と交渉中(<span id="walletLabel"></span>)</h1>
+    <p class="priceLine">現在の提示価格: <span id="priceLabel"></span> ICHIGO</p>
+    <p class="turnLine"><span id="turnLabel"></span></p>
+    <div class="chat" id="chat"></div>
+  </div>
+
+<script type="module">
+const POLL_MS = 2000;
+const $ = (id) => document.getElementById(id);
+
+let lastRenderedLength = -1;
+
+function renderTranscript(transcript) {
+  if (transcript.length === lastRenderedLength) return;
+  lastRenderedLength = transcript.length;
+  const chat = $("chat");
+  chat.innerHTML = "";
+  for (const m of transcript) {
+    const div = document.createElement("div");
+    div.className = `bubble ${m.role === "user" ? "user" : "assistant"}`;
+    div.textContent = m.content;
+    chat.appendChild(div);
+  }
+  chat.scrollTop = chat.scrollHeight;
+}
+
+async function poll() {
+  try {
+    const res = await fetch("/negotiate-current");
+    const data = await res.json();
+
+    if (!data.active) {
+      $("idleView").classList.remove("hidden");
+      $("activeView").classList.add("hidden");
+      lastRenderedLength = -1;
+      return;
+    }
+
+    $("idleView").classList.add("hidden");
+    $("activeView").classList.remove("hidden");
+    $("walletLabel").textContent = data.wallet;
+    $("priceLabel").textContent = data.price;
+    $("turnLabel").textContent =
+      data.status === "awaiting-payment" ? `${data.price} ICHIGOで確定・支払い待ち` : `${data.turn}/${data.maxTurn}ターン`;
+    renderTranscript(data.transcript);
+  } catch {
+    // 一時的な通信エラーは次のポーリングで回復するので無視する
+  }
+}
+
+poll();
+setInterval(poll, POLL_MS);
+</script>
+</body>
+</html>

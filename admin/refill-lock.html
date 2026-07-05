@@ -38,6 +38,19 @@
   </div>
   <p id="status"></p>
 
+  <hr style="margin: 32px 0; border: none; border-top: 1px solid #eee;">
+
+  <h1>AI店番の交渉状況</h1>
+  <p class="muted">
+    参加者のスマホが電池切れ・離脱等で交渉が止まってしまった場合に、実機を次の人のために解放します。
+    通常は自動的に一定時間で解放されますが、列ができている場合はここで即座に強制終了できます。
+  </p>
+  <p id="negotiateStatus" class="muted">状況を確認中…</p>
+  <div class="buttons">
+    <button id="cancelNegotiationBtn">今の交渉を強制終了</button>
+  </div>
+  <p id="negotiateActionStatus"></p>
+
 <script>
 const $ = (id) => document.getElementById(id);
 const secretInput = $("secret");
@@ -108,6 +121,58 @@ async function sendAction(action, label) {
 
 openBtn.addEventListener("click", () => sendAction("open", "開け"));
 closeBtn.addEventListener("click", () => sendAction("close", "閉め"));
+
+// AI店番の交渉状況(認証不要のエンドポイントなので、単に定期的に見に行くだけ)
+const negotiateStatusEl = $("negotiateStatus");
+const cancelNegotiationBtn = $("cancelNegotiationBtn");
+
+async function pollNegotiateCurrent() {
+  try {
+    const res = await fetch("/negotiate-current");
+    const data = await res.json();
+    if (!data.active) {
+      negotiateStatusEl.textContent = "現在、交渉中の参加者はいません";
+      return;
+    }
+    const statusLabel = data.status === "awaiting-payment" ? "価格確定・支払い待ち" : "交渉中";
+    negotiateStatusEl.textContent = `${data.wallet} が${statusLabel}(現在価格: ${data.price} ICHIGO, ${data.turn}/${data.maxTurn}ターン)`;
+  } catch {
+    negotiateStatusEl.textContent = "状況を取得できませんでした(この機能が無効か、通信エラーです)";
+  }
+}
+
+cancelNegotiationBtn.addEventListener("click", async () => {
+  const secret = secretInput.value.trim();
+  if (!secret) {
+    $("negotiateActionStatus").textContent = "合言葉(X-Secret)を入力してください";
+    $("negotiateActionStatus").className = "err";
+    return;
+  }
+  cancelNegotiationBtn.disabled = true;
+  try {
+    const res = await fetch("/negotiate-admin-cancel", {
+      method: "POST",
+      headers: { "X-Secret": secret },
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      $("negotiateActionStatus").textContent = "強制終了に失敗しました: " + (data.error || "不明なエラー");
+      $("negotiateActionStatus").className = "err";
+    } else {
+      $("negotiateActionStatus").textContent = data.cancelled ? "交渉を強制終了し、実機を解放しました" : "現在進行中の交渉はありませんでした";
+      $("negotiateActionStatus").className = "ok";
+      await pollNegotiateCurrent();
+    }
+  } catch (err) {
+    $("negotiateActionStatus").textContent = "エラー: " + (err.message || err);
+    $("negotiateActionStatus").className = "err";
+  } finally {
+    cancelNegotiationBtn.disabled = false;
+  }
+});
+
+pollNegotiateCurrent();
+setInterval(pollNegotiateCurrent, 3000);
 </script>
 </body>
 </html>
