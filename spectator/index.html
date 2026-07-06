@@ -17,6 +17,10 @@
   .bubble { max-width: 70%; padding: 14px 18px; border-radius: 16px; font-size: 1.4rem; line-height: 1.5; white-space: pre-wrap; }
   .bubble.user { margin-left: auto; background: var(--pink); color: #fff; }
   .bubble.assistant { margin-right: auto; background: #2a2a2a; color: #eee; }
+  .manualNotice { margin-top: 20px; font-size: 1.6rem; color: #aaa; text-align: center; }
+  .completed { text-align: center; margin-top: 20vh; }
+  .completed h2 { font-size: 2.4rem; color: var(--pink); margin-bottom: 12px; }
+  .completed .priceLine { justify-content: center; }
   .hidden { display: none; }
 </style>
 </head>
@@ -26,22 +30,36 @@
     <p class="muted">QRコードをスキャンして交渉を始めてください</p>
   </div>
 
+  <div id="completedView" class="hidden completed">
+    <h2>ありがとうございました!</h2>
+    <p class="priceLine"><span id="completedNameLabel"></span>さん、<span id="completedPriceLabel"></span> ICHIGO</p>
+    <p class="muted">次の方、お待たせしました</p>
+  </div>
+
   <div id="activeView" class="hidden">
-    <h1>AI店番と交渉中(<span id="walletLabel"></span>)</h1>
+    <h1>交渉中(<span id="walletLabel"></span>)</h1>
     <p class="priceLine">現在の提示価格: <span id="priceLabel"></span> ICHIGO</p>
-    <p class="turnLine"><span id="turnLabel"></span></p>
+    <p class="turnLine" id="turnLine"><span id="turnLabel"></span></p>
     <div class="chat" id="chat"></div>
+    <p class="manualNotice hidden" id="manualNotice">スタッフと直接交渉中です</p>
   </div>
 
 <script type="module">
 const POLL_MS = 2000;
 const $ = (id) => document.getElementById(id);
 
-let lastRenderedLength = -1;
+// 「再描画をスキップするか」の判定キー。transcript.lengthだけで判定すると、
+// Aさんの交渉終了直後にBさんが交渉を始め、たまたま会話の往復回数が同じ長さに
+// なった場合に、名前・価格ラベルはBさんに切り替わるのにチャット本文だけAさんの
+// 古い内容が残る、という誤表示が起きる。マスク済みウォレット(既存の公開フィールド)
+// の変化も見ることでセッションの切り替わりを検知する(sessionId自体は/negotiate-message等が
+// 知っていれば操作できてしまうため、投影ページ経由で不特定多数に晒す新しい公開項目にはしない)。
+let lastRenderedKey = null;
 
-function renderTranscript(transcript) {
-  if (transcript.length === lastRenderedLength) return;
-  lastRenderedLength = transcript.length;
+function renderTranscript(wallet, transcript) {
+  const key = `${wallet}:${transcript.length}`;
+  if (key === lastRenderedKey) return;
+  lastRenderedKey = key;
   const chat = $("chat");
   chat.innerHTML = "";
   for (const m of transcript) {
@@ -53,25 +71,51 @@ function renderTranscript(transcript) {
   chat.scrollTop = chat.scrollHeight;
 }
 
+function showOnly(viewId) {
+  for (const id of ["idleView", "completedView", "activeView"]) {
+    $(id).classList.toggle("hidden", id !== viewId);
+  }
+}
+
 async function poll() {
   try {
     const res = await fetch("/negotiate-current");
     const data = await res.json();
 
-    if (!data.active) {
-      $("idleView").classList.remove("hidden");
-      $("activeView").classList.add("hidden");
-      lastRenderedLength = -1;
+    if (data.active) {
+      showOnly("activeView");
+      $("walletLabel").textContent = data.displayName || data.wallet;
+
+      if (data.mode === "manual") {
+        // manualモード(店員と対面で交渉)はサーバー側にチャット履歴が無いので、
+        // チャット欄の代わりにプレースホルダを出し、ターン数表示も隠す。
+        $("chat").classList.add("hidden");
+        $("turnLine").classList.add("hidden");
+        $("manualNotice").classList.remove("hidden");
+        lastRenderedKey = null;
+      } else {
+        $("chat").classList.remove("hidden");
+        $("turnLine").classList.remove("hidden");
+        $("manualNotice").classList.add("hidden");
+        renderTranscript(data.wallet, data.transcript);
+      }
+
+      $("priceLabel").textContent = data.price;
+      $("turnLabel").textContent =
+        data.status === "awaiting-payment" ? `${data.price} ICHIGOで確定・支払い待ち` : `${data.turn}/${data.maxTurn}ターン`;
       return;
     }
 
-    $("idleView").classList.add("hidden");
-    $("activeView").classList.remove("hidden");
-    $("walletLabel").textContent = data.wallet;
-    $("priceLabel").textContent = data.price;
-    $("turnLabel").textContent =
-      data.status === "awaiting-payment" ? `${data.price} ICHIGOで確定・支払い待ち` : `${data.turn}/${data.maxTurn}ターン`;
-    renderTranscript(data.transcript);
+    lastRenderedKey = null;
+
+    if (data.justCompleted) {
+      showOnly("completedView");
+      $("completedNameLabel").textContent = data.justCompleted.displayName || data.justCompleted.wallet;
+      $("completedPriceLabel").textContent = data.justCompleted.price;
+      return;
+    }
+
+    showOnly("idleView");
   } catch {
     // 一時的な通信エラーは次のポーリングで回復するので無視する
   }

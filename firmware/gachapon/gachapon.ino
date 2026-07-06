@@ -79,12 +79,13 @@ const int UNLOCK_MOVE_MS = 500; // ロック⇔解除角度の間をゆっくり
 // 決済とは無関係に管理者ページ(/admin/refill-lock.html)から開閉を指示する。
 // メインと違い「開けたら管理者が手動で閉めるまで開いたまま」という動きにする
 // (補充作業中はフタを開けっぱなしにできた方が都合がよいため)。
-// REFILL_CLOSED_ANGLE/REFILL_OPEN_ANGLEはひとまずの仮値。motor-test.htmlで
-// このサーボも試し動かしできるようにしてあるので、実機で確認して調整すること。
+// 起動時のデフォルトは「開いている」状態(180度)で、そこから管理者が「閉める」を
+// 押すと80度まで倒れてロックがかかる、という向き(2026-07-06、実機確認の結果に合わせて
+// OPEN/CLOSEDの角度を入れ替えた)。moveMs=0(即座に動かして落とす)は変更なし。
 const int REFILL_SERVO_PIN = 19;
-const int REFILL_CLOSED_ANGLE = 180;
-const int REFILL_OPEN_ANGLE = 0;
-const int REFILL_MOVE_MS = 500;
+const int REFILL_OPEN_ANGLE = 180;
+const int REFILL_CLOSED_ANGLE = 80;
+const int REFILL_MOVE_MS = 0;
 
 // このボードのOLEDは 128x64, I2Cアドレス0x3C, SDA=GPIO21/SCL=GPIO22(基板内蔵配線)
 // 画面が真っ白/真っ暗のままなら、末尾を _F_HW_I2C のまま別コンストラクタ
@@ -113,6 +114,46 @@ void showLines(const String& line1, const String& line2 = "", const String& line
   u8g2.setFont(ASCII_FONT);
   u8g2.drawUTF8(0, 50, line3.c_str());
   u8g2.sendBuffer();
+}
+
+// 購入者名など長さが可変な1行目(line1)を表示する。128px画面に収まるならそのまま
+// 静止表示するだけでよいが、収まらない場合は右端(画面外)から左へ完全に抜けるまで
+// スクロールする。line2は(空文字でなければ)常に同じ位置に固定表示する。
+// スクロール時の総時間はmaxDurationMsを超えない(名前が長くてもOTA/ヒープ監視の
+// チェックが長時間止まらないようにするため。最短1.5秒は確保する)。
+void showScrollingMessage(const String& line1, const String& line2, unsigned long maxDurationMs) {
+  if (!oledReady) return;
+
+  u8g2.setFont(JP_FONT);
+  int textWidth = u8g2.getUTF8Width(line1.c_str());
+  const int screenWidth = 128;
+
+  if (textWidth <= screenWidth) {
+    u8g2.clearBuffer();
+    u8g2.setFont(JP_FONT);
+    u8g2.drawUTF8(0, 16, line1.c_str());
+    if (line2.length() > 0) u8g2.drawUTF8(0, 34, line2.c_str());
+    u8g2.sendBuffer();
+    delay(1500); // 収まる場合はそのまま少し表示するだけでよい
+    return;
+  }
+
+  const unsigned long STEP_MS = 30; // フレーム間隔
+  unsigned long durationMs = maxDurationMs < 1500 ? 1500 : maxDurationMs;
+  int startX = screenWidth;
+  int endX = -textWidth;
+  long totalDistance = (long)startX - (long)endX;
+  unsigned long totalSteps = durationMs / STEP_MS;
+  if (totalSteps < 1) totalSteps = 1;
+  for (unsigned long i = 0; i <= totalSteps; i++) {
+    int x = startX - (int)((totalDistance * (long)i) / (long)totalSteps);
+    u8g2.clearBuffer();
+    u8g2.setFont(JP_FONT);
+    u8g2.drawUTF8(x, 16, line1.c_str());
+    if (line2.length() > 0) u8g2.drawUTF8(0, 34, line2.c_str());
+    u8g2.sendBuffer();
+    delay(STEP_MS);
+  }
 }
 
 // サーボを、指定時間(durationMs)かけてゆっくり目的角度まで回す。
@@ -274,7 +315,7 @@ IPAddress currentIP() {
 }
 
 void showIdleScreen() {
-  showLines("ICHIGO", "たいきちゅう", "IP: " + currentIP().toString());
+  showLines("ICHIGOGACHA", "たいきちゅう", "IP: " + currentIP().toString());
 }
 
 // HTTPS(TLS)通信を数秒おきに繰り返すとESP32のメモリが徐々に減っていき、
@@ -287,7 +328,7 @@ void pollBridge() {
   if (ESP.getFreeHeap() < MIN_SAFE_HEAP) {
     Serial.print("空きメモリが少なくなったため自動再起動します。空きヒープ: ");
     Serial.println(ESP.getFreeHeap());
-    showLines("ICHIGO", "さいきどうします");
+    showLines("ICHIGOGACHA", "さいきどうします");
     delay(300);
     ESP.restart();
   }
@@ -315,8 +356,12 @@ void pollBridge() {
     String body = http.getString();
     if (body.indexOf("\"unlock\":true") >= 0) {
       String requestId = extractJsonStringField(body, "requestId");
-      Serial.println("解除待ちを検知。ロック解除動作を実行します");
-      showLines("かいじょ!", "だしています", "");
+      // displayNameは購入者が(任意で)登録した呼び名。bridge側で既にひらがな・カタカナ・
+      // 半角英数字だけに絞られているので、そのままOLEDに出しても文字が欠けない前提。
+      String displayName = extractJsonStringField(body, "displayName");
+      String buyerLine = displayName.length() > 0 ? (displayName + "さんがこうにゅう") : "だれかがこうにゅう";
+      Serial.println("解除待ちを検知。ロック解除動作を実行します: " + displayName);
+      showScrollingMessage(buyerLine, "かいじょちゅう", 4000);
 
       bool servoOk = gachaServo.attached();
       if (servoOk) {
@@ -325,6 +370,14 @@ void pollBridge() {
         Serial.println("警告: サーボが接続されていません。失敗として報告します");
       }
       reportUnlockResult(requestId, servoOk);
+
+      if (servoOk) {
+        String thanksLine = displayName.length() > 0 ? (displayName + "さんありがとう!") : "ありがとう!";
+        showScrollingMessage(thanksLine, "", 3000);
+      } else {
+        showLines("ICHIGOGACHA", "こしょう?", "スタッフをよんで");
+        delay(2500);
+      }
 
       showIdleScreen();
     }
@@ -340,7 +393,7 @@ void pollBridge() {
       long moveMs = constrain(extractJsonNumberField(body, "testMoveMs"), 0, 5000);
       bool isRefill = (testServoName == "refill");
       Servo& targetServo = isRefill ? refillServo : gachaServo;
-      int restAngle = isRefill ? REFILL_CLOSED_ANGLE : LOCK_ANGLE;
+      int restAngle = isRefill ? REFILL_OPEN_ANGLE : LOCK_ANGLE; // 補充用の待機角度=デフォルトの開いた状態
       Serial.println("テスト動作を検知: servo=" + testServoName + " angle=" + String(angle) + " holdMs=" + String(holdMs) + " moveMs=" + String(moveMs));
       showLines("テストどうさ", String(angle) + "do " + String(holdMs) + "ms");
 
@@ -390,14 +443,14 @@ void setup() {
   if (!oledReady) {
     Serial.println("OLEDが見つかりませんでした(I2Cアドレスが違う可能性)。表示なしで続行します。");
   }
-  showLines("ICHIGO", "きどうちゅう");
+  showLines("ICHIGOGACHA", "きどうちゅう");
 
   // WiFi接続時の消費電流のピークを抑える(USB給電の電力不足によるブラウンアウト再起動対策)。
   WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
   // サーボへの通電(電流を使う)とWiFi接続(電流を使う)が同時に起きないよう、
   // WiFi接続が終わってからサーボに通電するようにする。
-  showLines("ICHIGO", "WiFiせつぞく");
+  showLines("ICHIGOGACHA", "WiFiせつぞく");
   if (AP_MODE) {
     WiFi.softAP(AP_SSID, AP_PASSWORD);
     Serial.print("アクセスポイントとして起動しました。SSID: ");
@@ -413,19 +466,22 @@ void setup() {
     }
     Serial.println();
   }
+  // 接続が完了した瞬間を示す画面(それまでの「WiFiせつぞく」中との区別が付くように)。
+  showLines("ICHIGOGACHA", "せつぞくOK");
+  delay(1000);
   Serial.print("IPアドレス: ");
   Serial.println(currentIP());
 
   gachaServo.attach(SERVO_PIN);
   gachaServo.write(LOCK_ANGLE);
   refillServo.attach(REFILL_SERVO_PIN);
-  refillServo.write(REFILL_CLOSED_ANGLE);
+  refillServo.write(REFILL_OPEN_ANGLE); // 起動時のデフォルトは開いている状態
 
   // WiFi経由書き込み(OTA)の設定。Arduino IDEの「ツール」→「ポート」に
   // "ichigo-gachapon" として表示されるようになる。
   ArduinoOTA.setHostname("ichigo-gachapon");
-  ArduinoOTA.onStart([]() { showLines("ICHIGO", "こうしんちゅう..."); });
-  ArduinoOTA.onEnd([]() { showLines("ICHIGO", "こうしんかんりょう"); });
+  ArduinoOTA.onStart([]() { showLines("ICHIGOGACHA", "こうしんちゅう..."); });
+  ArduinoOTA.onEnd([]() { showLines("ICHIGOGACHA", "こうしんかんりょう"); });
   ArduinoOTA.begin();
   Serial.println("OTA待受開始(Arduino IDEのポート一覧に ichigo-gachapon が出ます)");
 

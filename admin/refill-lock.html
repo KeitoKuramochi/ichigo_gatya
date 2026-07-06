@@ -19,6 +19,16 @@
   .ok { color: #1e8449; }
   .err { color: #c0392b; white-space: pre-wrap; }
   .busy { color: #888; }
+  .warn { color: #b8860b; font-weight: 600; }
+  input[type="number"] { width: 100%; box-sizing: border-box; font-size: 1rem; padding: 6px 8px; border: 1px solid #ccc; border-radius: 8px; margin-top: 8px; }
+  #setPriceBtn { background: var(--pink); margin-top: 8px; }
+  #dismissCompletedBtn { background: #888; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: .85rem; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #eee; }
+  .status-unlocked { color: #1e8449; }
+  .status-failed, .status-timeout { color: #c0392b; }
+  .status-pending, .status-unknown, .status-dispatched { color: #888; }
+  .hidden { display: none; }
 </style>
 </head>
 <body>
@@ -30,7 +40,9 @@
 
   <label for="secret">合言葉(X-Secret)</label>
   <input id="secret" type="text" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="gachapon.inoのSHARED_SECRETと同じ文字列">
-  <p class="muted">ESP32・bridgeの設定と同じ合言葉を入力してください(ブラウザに保存されます)</p>
+  <p class="muted">
+    物理ロック(このセクション)はESP32・bridgeの合言葉(ESP32_SECRET)、下の交渉関連の操作はNEGOTIATE_ADMIN_SECRET(未設定ならESP32_SECRETと同じ)を使います。この1つの入力欄に該当する合言葉を入れてください(ブラウザに保存されます)。
+  </p>
 
   <div class="buttons">
     <button id="openBtn">開ける</button>
@@ -40,16 +52,37 @@
 
   <hr style="margin: 32px 0; border: none; border-top: 1px solid #eee;">
 
-  <h1>AI店番の交渉状況</h1>
+  <h1>交渉状況・価格の確定</h1>
   <p class="muted">
     参加者のスマホが電池切れ・離脱等で交渉が止まってしまった場合に、実機を次の人のために解放します。
     通常は自動的に一定時間で解放されますが、列ができている場合はここで即座に強制終了できます。
   </p>
   <p id="negotiateStatus" class="muted">状況を確認中…</p>
+  <p id="aiFailureWarning" class="warn hidden"></p>
   <div class="buttons">
     <button id="cancelNegotiationBtn">今の交渉を強制終了</button>
   </div>
   <p id="negotiateActionStatus"></p>
+
+  <div id="setPriceSection" class="hidden">
+    <label for="setPriceInput">価格を直接確定する(manualモードでの通常入力、またはAIへの割り込み上書き)</label>
+    <input id="setPriceInput" type="number" min="0" step="1" placeholder="価格(ICHIGO)">
+    <button id="setPriceBtn">この価格で確定</button>
+    <p class="muted">交渉がすでに「価格確定・支払い待ち」の場合は上書きできません(送金と競合する事故を防ぐため)。まず「今の交渉を強制終了」してからやり直してください。</p>
+  </div>
+
+  <div id="dismissCompletedSection" class="hidden">
+    <button id="dismissCompletedBtn">サンキュー画面を消す</button>
+  </div>
+
+  <hr style="margin: 32px 0; border: none; border-top: 1px solid #eee;">
+
+  <h1>直近の購入履歴</h1>
+  <p class="muted">参加者本人のスマホ(レシート画面)が使えない場合の確認用です。</p>
+  <div class="buttons">
+    <button id="refreshPurchasesBtn">更新</button>
+  </div>
+  <div id="purchasesTableWrap"></div>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -125,19 +158,45 @@ closeBtn.addEventListener("click", () => sendAction("close", "閉め"));
 // AI店番の交渉状況(認証不要のエンドポイントなので、単に定期的に見に行くだけ)
 const negotiateStatusEl = $("negotiateStatus");
 const cancelNegotiationBtn = $("cancelNegotiationBtn");
+const setPriceSection = $("setPriceSection");
+const setPriceInput = $("setPriceInput");
+const setPriceBtn = $("setPriceBtn");
+const dismissCompletedSection = $("dismissCompletedSection");
+const dismissCompletedBtn = $("dismissCompletedBtn");
+const aiFailureWarningEl = $("aiFailureWarning");
+
+let lastActiveSession = null; // 価格確定ボタンの確認ダイアログ用に、直近のポーリング結果を覚えておく
 
 async function pollNegotiateCurrent() {
   try {
     const res = await fetch("/negotiate-current");
     const data = await res.json();
+
+    if (data.aiFailures >= 3) {
+      aiFailureWarningEl.textContent = `AI応答: 直近${data.aiFailures}回連続失敗しています。manual上書きの利用を検討してください`;
+      aiFailureWarningEl.classList.remove("hidden");
+    } else {
+      aiFailureWarningEl.classList.add("hidden");
+    }
+
     if (!data.active) {
+      lastActiveSession = null;
       negotiateStatusEl.textContent = "現在、交渉中の参加者はいません";
+      setPriceSection.classList.add("hidden");
+      dismissCompletedSection.classList.toggle("hidden", !data.justCompleted);
       return;
     }
+
+    lastActiveSession = data;
     const statusLabel = data.status === "awaiting-payment" ? "価格確定・支払い待ち" : "交渉中";
-    negotiateStatusEl.textContent = `${data.wallet} が${statusLabel}(現在価格: ${data.price} ICHIGO, ${data.turn}/${data.maxTurn}ターン)`;
+    const modeLabel = data.mode === "manual" ? "手動モード" : "AIモード";
+    const nameLabel = data.displayName || data.wallet;
+    negotiateStatusEl.textContent = `${nameLabel}さん(${modeLabel})が${statusLabel}(現在価格: ${data.price} ICHIGO, ${data.turn}/${data.maxTurn}ターン)`;
+    // 価格の上書きはnegotiating中のみ許可(awaiting-paymentは送金と競合する事故を防ぐためbridge側で拒否される)。
+    setPriceSection.classList.toggle("hidden", data.status !== "negotiating");
+    dismissCompletedSection.classList.add("hidden"); // アクティブな交渉がある間は「サンキュー画面」は出ていない
   } catch {
-    negotiateStatusEl.textContent = "状況を取得できませんでした(この機能が無効か、通信エラーです)";
+    negotiateStatusEl.textContent = "状況を取得できませんでした(通信エラーです)";
   }
 }
 
@@ -171,8 +230,133 @@ cancelNegotiationBtn.addEventListener("click", async () => {
   }
 });
 
+setPriceBtn.addEventListener("click", async () => {
+  const secret = secretInput.value.trim();
+  if (!secret) {
+    $("negotiateActionStatus").textContent = "合言葉(X-Secret)を入力してください";
+    $("negotiateActionStatus").className = "err";
+    return;
+  }
+  const price = Number(setPriceInput.value);
+  if (!Number.isFinite(price) || setPriceInput.value.trim() === "") {
+    $("negotiateActionStatus").textContent = "価格を数値で入力してください";
+    $("negotiateActionStatus").className = "err";
+    return;
+  }
+  // スタッフの入力ミス(桁間違い等)による過大/過小請求を防ぐための確認ダイアログ。
+  const nameLabel = lastActiveSession ? (lastActiveSession.displayName || lastActiveSession.wallet) : "お客";
+  if (!confirm(`${nameLabel}さんに ${price} ICHIGO で確定します。よろしいですか?`)) {
+    return;
+  }
+  setPriceBtn.disabled = true;
+  try {
+    const res = await fetch("/negotiate-admin-set-price", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Secret": secret },
+      body: JSON.stringify({ price }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      let msg = "価格の確定に失敗しました: " + (data.error || "不明なエラー");
+      if (res.status === 409) msg = "少し待って再試行してください(AI応答を処理中です)";
+      if (res.status === 400 && /価格確定済み/.test(data.error || "")) msg = "先に交渉をキャンセルしてください(既に価格確定済みのため上書きできません)";
+      $("negotiateActionStatus").textContent = msg;
+      $("negotiateActionStatus").className = "err";
+    } else {
+      $("negotiateActionStatus").textContent = `${data.price} ICHIGOで確定しました`;
+      $("negotiateActionStatus").className = "ok";
+      setPriceInput.value = "";
+      await pollNegotiateCurrent();
+    }
+  } catch (err) {
+    $("negotiateActionStatus").textContent = "エラー: " + (err.message || err);
+    $("negotiateActionStatus").className = "err";
+  } finally {
+    setPriceBtn.disabled = false;
+  }
+});
+
+dismissCompletedBtn.addEventListener("click", async () => {
+  const secret = secretInput.value.trim();
+  if (!secret) {
+    $("negotiateActionStatus").textContent = "合言葉(X-Secret)を入力してください";
+    $("negotiateActionStatus").className = "err";
+    return;
+  }
+  dismissCompletedBtn.disabled = true;
+  try {
+    await fetch("/negotiate-admin-clear-completed", { method: "POST", headers: { "X-Secret": secret } });
+    await pollNegotiateCurrent();
+  } catch (err) {
+    $("negotiateActionStatus").textContent = "エラー: " + (err.message || err);
+    $("negotiateActionStatus").className = "err";
+  } finally {
+    dismissCompletedBtn.disabled = false;
+  }
+});
+
+// 直近の購入履歴(スタッフ専用)
+const purchasesTableWrap = $("purchasesTableWrap");
+
+// displayNameは客の自由入力なので、テーブルをinnerHTMLで組み立てる際は
+// 必ずエスケープする(表示名経由でのHTML injectionを防ぐ)。
+function escapeHtml(text) {
+  return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function statusLabelJa(status) {
+  switch (status) {
+    case "unlocked": return "排出済み";
+    case "failed": return "失敗";
+    case "timeout": return "タイムアウト";
+    case "dispatched": return "実行中";
+    case "pending": return "待機中";
+    default: return "不明";
+  }
+}
+
+async function loadRecentPurchases() {
+  const secret = secretInput.value.trim();
+  if (!secret) {
+    purchasesTableWrap.textContent = "合言葉(X-Secret)を入力してください";
+    return;
+  }
+  try {
+    const res = await fetch("/negotiate-admin-recent-purchases", { headers: { "X-Secret": secret } });
+    const data = await res.json();
+    if (!data.ok) {
+      purchasesTableWrap.textContent = "取得に失敗しました: " + (data.error || "不明なエラー");
+      return;
+    }
+    if (!data.purchases.length) {
+      purchasesTableWrap.textContent = "まだ購入履歴がありません";
+      return;
+    }
+    const rows = data.purchases.map((p) => `
+      <tr>
+        <td>${escapeHtml(new Date(p.completedAt).toLocaleTimeString("ja-JP"))}</td>
+        <td>${escapeHtml(p.displayName || p.wallet)}</td>
+        <td>${escapeHtml(p.price)}</td>
+        <td class="status-${escapeHtml(p.unlockStatus)}">${escapeHtml(statusLabelJa(p.unlockStatus))}</td>
+      </tr>
+    `).join("");
+    purchasesTableWrap.innerHTML = `
+      <table>
+        <thead><tr><th>時刻</th><th>名前</th><th>金額</th><th>解除</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  } catch (err) {
+    purchasesTableWrap.textContent = "エラー: " + (err.message || err);
+  }
+}
+
+$("refreshPurchasesBtn").addEventListener("click", loadRecentPurchases);
+
 pollNegotiateCurrent();
 setInterval(pollNegotiateCurrent, 3000);
+loadRecentPurchases();
+setInterval(loadRecentPurchases, 10000);
 </script>
 </body>
 </html>

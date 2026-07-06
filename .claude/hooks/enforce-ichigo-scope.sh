@@ -5,6 +5,11 @@
 set -euo pipefail
 
 ALLOWED_PREFIX="/Users/kuramochikeito/Desktop/web3.0/ichigo/"
+# Claude Code's plan-mode feature requires writing the plan file under this
+# fixed path, outside any project folder. Carved out as a narrow exception
+# (2026-07-06, approved by project owner) so /plan keeps working; nothing
+# else outside ichigo/ is allowed.
+PLAN_MODE_PREFIX="/Users/kuramochikeito/.claude/plans/"
 
 input=$(cat)
 file_path=$(printf '%s' "$input" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty')
@@ -15,7 +20,7 @@ if [ -z "$file_path" ]; then
 fi
 
 case "$file_path" in
-  "$ALLOWED_PREFIX"*)
+  "$ALLOWED_PREFIX"*|"$PLAN_MODE_PREFIX"*)
     exit 0
     ;;
 esac

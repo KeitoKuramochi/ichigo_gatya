@@ -25,6 +25,12 @@
   .chatInputRow { display: flex; gap: 8px; margin-bottom: 8px; }
   .chatInputRow input { flex: 1; font-size: 1rem; padding: 8px 10px; border-radius: 10px; border: 1px solid #ccc; }
   .priceLine { font-size: 1.1rem; font-weight: 700; margin: 4px 0; }
+  .nameRow { display: flex; gap: 8px; margin: 8px 0; }
+  .nameRow input { flex: 1; font-size: 1rem; padding: 8px 10px; border-radius: 10px; border: 1px solid #ccc; }
+  .receipt { border: 2px solid var(--pink); border-radius: 12px; padding: 16px; margin: 12px 0; }
+  .receipt h2 { margin: 0 0 8px; font-size: 1.2rem; }
+  .receiptRow { margin: 4px 0; }
+  .clearBtn { background: #888; margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -35,9 +41,13 @@
   <p class="muted" id="account"></p>
   <p class="balance" id="balanceLabel"></p>
 
-  <div id="disabledNotice" class="hidden">
-    <p class="err">現在、AI店番との交渉は利用できません。</p>
-    <p><a href="/">通常の決済ページはこちら</a></p>
+  <div id="nameSection" class="hidden">
+    <p class="muted">呼び名(任意、みんなに見えます)を入力してください。空欄でも進めます。<br>ひらがな・カタカナ・半角英数字のみ使えます(漢字や絵文字は使えません)。</p>
+    <div class="nameRow">
+      <input id="displayNameInput" type="text" maxlength="20" placeholder="呼び名(任意)">
+      <button id="startNegotiationBtn">この名前で始める</button>
+    </div>
+    <p class="err hidden" id="nameError"></p>
   </div>
 
   <div id="chatSection" class="hidden">
@@ -50,9 +60,23 @@
     <p class="priceLine">現在の提示価格: <span id="priceLabel"></span> ICHIGO(<span id="turnLabel"></span>)</p>
   </div>
 
+  <div id="manualWaitSection" class="hidden">
+    <p>店員と直接ご相談ください。値段が決まったらここに表示されます。</p>
+    <p class="priceLine">現在価格: <span id="manualPriceLabel"></span> ICHIGO</p>
+  </div>
+
   <div id="paySection" class="hidden">
     <p class="priceLine">確定価格: <span id="finalPriceLabel"></span> ICHIGO</p>
     <button id="payBtn">② 支払ってガチャを回す</button>
+  </div>
+
+  <div id="receiptSection" class="hidden receipt">
+    <h2 id="receiptTitle"></h2>
+    <p class="receiptRow">お支払い: <strong id="receiptPriceLabel"></strong> ICHIGO</p>
+    <p class="receiptRow muted" id="receiptTimeLabel"></p>
+    <p class="receiptRow" id="receiptUnlockStatus"></p>
+    <p class="receiptRow muted" id="receiptTxHashLabel"></p>
+    <button id="clearReceiptBtn" class="clearBtn">この画面を消す(別の人が使う場合)</button>
   </div>
 
   <p id="status"></p>
@@ -68,16 +92,47 @@ const ERC20_ABI = [
 ];
 const UNLOCK_POLL_MS = 1500;
 const UNLOCK_POLL_MAX_TRIES = 20; // 約30秒。ESP32側のタイムアウト(15秒)+余裕分
+const MANUAL_POLL_MS = 2000; // manualモード(店員と対面交渉)待機中、価格確定を待つポーリング間隔
+const RECEIPT_STORAGE_KEY = "ichigo_receipt";
+const RECEIPT_TTL_MS = 30 * 60 * 1000; // 決済証拠画面。古い受け取りを別の人に見せてしまわないための期限
+const SESSION_STORAGE_KEY = "ichigo_negotiate_session";
+const SESSION_POINTER_TTL_MS = 20 * 60 * 1000; // リロード時に名前入力を再度求めないための「しおり」
 
 const $ = (id) => document.getElementById(id);
 
 let provider, signer, account, token, decimals = 18n;
 let sessionId = null;
+let displayName = null;
 let finalPrice = null;
+let manualPollHandle = null;
+
+function readJSON(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key));
+  } catch {
+    return null;
+  }
+}
+function writeJSON(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
 
 function showStatus(text, cls) {
   $("status").textContent = text;
   $("status").className = cls || "";
+}
+
+function hideAllSections() {
+  for (const id of ["nameSection", "chatSection", "manualWaitSection", "paySection", "receiptSection"]) {
+    $(id).classList.add("hidden");
+  }
+}
+
+function stopManualPoll() {
+  if (manualPollHandle) {
+    clearInterval(manualPollHandle);
+    manualPollHandle = null;
+  }
 }
 
 function appendBubble(role, content) {
@@ -100,10 +155,41 @@ function setNegotiationUiState(price, turn, maxTurn) {
 }
 
 function enterPaymentPhase(price) {
+  stopManualPoll();
   finalPrice = price;
+  $("nameSection").classList.add("hidden");
   $("chatSection").classList.add("hidden");
+  $("manualWaitSection").classList.add("hidden");
   $("finalPriceLabel").textContent = finalPrice;
   $("paySection").classList.remove("hidden");
+}
+
+// manualモード(AI無し、店員と対面で交渉)のセッションは、参加者側は入力する
+// ものが無いので、店員がadmin/refill-lock.htmlで価格を確定するまで
+// /negotiate-current(公開・認証不要)を軽くポーリングして待つだけでよい。
+function enterManualWaitingView(price) {
+  $("nameSection").classList.add("hidden");
+  $("manualPriceLabel").textContent = price;
+  $("manualWaitSection").classList.remove("hidden");
+  stopManualPoll();
+  manualPollHandle = setInterval(async () => {
+    try {
+      const res = await fetch("/negotiate-current");
+      const data = await res.json();
+      if (!data.active) {
+        // スタッフに強制終了された、またはタイムアウトで放置判定された。
+        stopManualPoll();
+        showStatus("交渉が終了しました。お手数ですがもう一度スタッフにお声がけください", "err");
+        return;
+      }
+      $("manualPriceLabel").textContent = data.price;
+      if (data.status === "awaiting-payment") {
+        enterPaymentPhase(data.price);
+      }
+    } catch {
+      // 通信の瞬断は次のポーリングで回復するので無視する
+    }
+  }, MANUAL_POLL_MS);
 }
 
 async function ensureOptimism() {
@@ -150,6 +236,76 @@ async function waitForUnlock(txHash) {
   return "timeout";
 }
 
+function renderReceiptUnlockStatus(status) {
+  const el = $("receiptUnlockStatus");
+  if (!status || status === "pending" || status === "unknown") {
+    el.textContent = "ガチャガチャを解除しています…";
+    el.className = "receiptRow";
+  } else if (status === "unlocked") {
+    el.textContent = "解除完了!カプセルをお受け取りください";
+    el.className = "receiptRow ok";
+  } else {
+    const reason = status === "timeout" ? "解除確認がタイムアウトしました" : "実機の解除に失敗しました";
+    el.textContent = `${reason}。このtxHashをスタッフにお見せください`;
+    el.className = "receiptRow err";
+  }
+}
+
+// 決済成功の証拠画面を描画する。仮に機材(ESP32)側でトラブルがあっても、
+// この画面自体(名前・金額・時刻・txHash)は消えないので、参加者がスタッフに
+// 見せれば対応できるようにする、という設計。
+function renderReceipt(receipt) {
+  hideAllSections();
+  // レシート画面は決済の最終状態(仮に機材トラブルがあっても証拠として残す画面)
+  // なので、ウォレット接続UI等は隠して混乱を避ける。
+  $("connectBtn").classList.add("hidden");
+  $("account").classList.add("hidden");
+  $("balanceLabel").classList.add("hidden");
+  $("receiptTitle").textContent = `${receipt.displayName || "お客"}さん、お買い上げありがとうございます!`;
+  $("receiptPriceLabel").textContent = receipt.price;
+  $("receiptTimeLabel").textContent = "支払い時刻: " + new Date(receipt.paidAt).toLocaleString("ja-JP");
+  $("receiptTxHashLabel").textContent = "txHash: " + receipt.txHash;
+  renderReceiptUnlockStatus(receipt.unlockStatus);
+  $("receiptSection").classList.remove("hidden");
+}
+
+function enterReceiptPhase({ wallet, displayName, price, txHash, sessionId }) {
+  stopManualPoll();
+  const receipt = { wallet, displayName, price, txHash, sessionId, paidAt: Date.now(), unlockStatus: "pending" };
+  writeJSON(RECEIPT_STORAGE_KEY, receipt);
+  localStorage.removeItem(SESSION_STORAGE_KEY); // セッションは消費済み。再開の必要は無い
+  renderReceipt(receipt);
+  showStatus("", "");
+
+  waitForUnlock(txHash).then((status) => {
+    receipt.unlockStatus = status;
+    writeJSON(RECEIPT_STORAGE_KEY, receipt);
+    renderReceiptUnlockStatus(status);
+  });
+}
+
+// ページ読み込み時、有効期限内の証拠画面が残っていればそれを最優先で復元する
+// (リロード・タブのバックグラウンド復帰でも消えないようにするのが目的)。
+// unlockStatusがまだ確定していなければ、その場で解除確認をもう一度やり直す
+// (固まった古いスナップショットのまま表示され続ける事故を防ぐ)。
+function tryRestoreReceipt() {
+  const receipt = readJSON(RECEIPT_STORAGE_KEY);
+  if (!receipt) return false;
+  if (Date.now() - receipt.paidAt > RECEIPT_TTL_MS) {
+    localStorage.removeItem(RECEIPT_STORAGE_KEY);
+    return false;
+  }
+  renderReceipt(receipt);
+  if (!receipt.unlockStatus || receipt.unlockStatus === "pending" || receipt.unlockStatus === "unknown") {
+    waitForUnlock(receipt.txHash).then((status) => {
+      receipt.unlockStatus = status;
+      writeJSON(RECEIPT_STORAGE_KEY, receipt);
+      renderReceiptUnlockStatus(status);
+    });
+  }
+  return true;
+}
+
 if (window.ethereum) {
   window.ethereum.on("accountsChanged", (accounts) => {
     if (!accounts.length || !signer) return; // まだ接続前なら何もしない
@@ -160,21 +316,16 @@ if (window.ethereum) {
   });
 }
 
-async function startNegotiation() {
+async function startNegotiation(nameToSubmit) {
   let res;
   try {
     res = await fetch("/negotiate-start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ wallet: account }),
+      body: JSON.stringify({ wallet: account, displayName: nameToSubmit || "" }),
     });
   } catch (err) {
     showStatus("交渉開始に失敗しました: " + (err.message || err), "err");
-    return;
-  }
-
-  if (res.status === 404) {
-    $("disabledNotice").classList.remove("hidden");
     return;
   }
 
@@ -192,14 +343,29 @@ async function startNegotiation() {
   }
 
   sessionId = data.sessionId;
-  renderTranscript(data.transcript);
-  setNegotiationUiState(data.price, data.turn, data.maxTurn);
+  displayName = data.displayName;
+  writeJSON(SESSION_STORAGE_KEY, {
+    wallet: account.toLowerCase(),
+    sessionId,
+    displayName,
+    mode: data.mode,
+    savedAt: Date.now(),
+  });
 
   if (data.status === "awaiting-payment") {
     enterPaymentPhase(data.price);
-  } else {
-    $("chatSection").classList.remove("hidden");
+    return;
   }
+
+  if (data.mode === "manual") {
+    enterManualWaitingView(data.price);
+    return;
+  }
+
+  renderTranscript(data.transcript);
+  setNegotiationUiState(data.price, data.turn, data.maxTurn);
+  $("nameSection").classList.add("hidden");
+  $("chatSection").classList.remove("hidden");
 }
 
 async function sendChatMessage(message) {
@@ -253,10 +419,34 @@ $("connectBtn").addEventListener("click", async () => {
     $("connectBtn").disabled = true;
     showStatus("", "");
 
-    await startNegotiation();
+    // すでにこのウォレットで交渉を始めていた(ページ再読み込み等)場合は、名前入力を
+    // 再度求めず、そのまま再開する。しおり自体が古すぎる(TTL超過)場合は無視して
+    // 通常通り名前入力から始める(その場合サーバー側もどうせ新規セッションを作るだけ)。
+    const saved = readJSON(SESSION_STORAGE_KEY);
+    if (saved && saved.wallet === account.toLowerCase() && Date.now() - saved.savedAt < SESSION_POINTER_TTL_MS) {
+      await startNegotiation(saved.displayName || "");
+    } else {
+      $("nameSection").classList.remove("hidden");
+    }
   } catch (err) {
     showStatus("接続エラー: " + (err.shortMessage || err.message || err), "err");
   }
+});
+
+// ESP32のOLEDフォント(ひらがな・カタカナ・半角英数字中心)が表示できる文字だけに
+// 絞る。サーバー側(sanitizeDisplayName)にも同じフィルタがあるが、ここで先に
+// 案内しておくことで、送信してから初めて文字が消えていることに気づく事故を防ぐ。
+const DISPLAY_NAME_PATTERN = /^[0-9A-Za-z぀-ヿ ]*$/;
+
+$("startNegotiationBtn").addEventListener("click", () => {
+  const name = $("displayNameInput").value.trim();
+  if (!DISPLAY_NAME_PATTERN.test(name)) {
+    $("nameError").textContent = "ひらがな・カタカナ・半角英数字のみ使えます(漢字や絵文字は使えません)。修正してください";
+    $("nameError").classList.remove("hidden");
+    return;
+  }
+  $("nameError").classList.add("hidden");
+  startNegotiation(name);
 });
 
 $("sendBtn").addEventListener("click", () => {
@@ -324,24 +514,26 @@ $("payBtn").addEventListener("click", async () => {
       return;
     }
 
-    showStatus("検証OK。ガチャガチャの解除を確認しています…", "");
-    const unlockStatus = await waitForUnlock(tx.hash);
-
-    if (unlockStatus === "unlocked") {
-      showStatus("支払い完了! ガチャガチャのロックが解除されました。カプセルをお受け取りください", "ok");
-    } else {
-      const reason = unlockStatus === "timeout" ? "解除確認がタイムアウトしました" : "実機の解除に失敗しました";
-      showStatus(
-        `送金は完了していますが、${reason}。\nお手数ですが下記のtxHashをスタッフにお伝えください:\n${tx.hash}`,
-        "err"
-      );
-    }
+    // オンチェーンでの検証はOK。ここで即座に「支払い完了」を出すのではなく、
+    // まず証拠画面(レシート)に切り替える。実機の解除確認はその画面の中で
+    // 続けて行い、失敗・タイムアウトしてもこの画面自体は残る(スタッフに見せられる)。
+    enterReceiptPhase({ wallet: account, displayName, price: finalPrice, txHash: tx.hash, sessionId });
   } catch (err) {
     showStatus("エラー: " + (err.shortMessage || err.message || err), "err");
   } finally {
     btn.disabled = false;
   }
 });
+
+$("clearReceiptBtn").addEventListener("click", () => {
+  localStorage.removeItem(RECEIPT_STORAGE_KEY);
+  localStorage.removeItem(SESSION_STORAGE_KEY);
+  location.reload();
+});
+
+// ページ読み込み時、有効期限内の証拠画面が残っていればそれを最優先で表示する
+// (見つからなければ何もしない。接続ボタンがデフォルトで表示されている状態のまま)。
+tryRestoreReceipt();
 </script>
 </body>
 </html>
