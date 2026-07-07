@@ -59,6 +59,7 @@
     </div>
     <button id="finalizeBtn">この価格で決める</button>
     <p class="priceLine">現在の提示価格: <span id="priceLabel"></span> ICHIGO(<span id="turnLabel"></span>)</p>
+    <p class="muted hidden" id="bonusNote"></p>
   </div>
 
   <div id="manualWaitSection" class="hidden">
@@ -160,9 +161,20 @@ function renderTranscript(transcript) {
   for (const m of transcript) appendBubble(m.role, m.content);
 }
 
-function setNegotiationUiState(price, turn, maxTurn) {
+function setNegotiationUiState(price, turn, maxTurn, bonus) {
   $("priceLabel").textContent = price;
   $("turnLabel").textContent = `${turn}/${maxTurn}ターン`;
+  // 店番AIは自分が口にした金額(会話の質ボーナスを含まない生の値切り価格)をそのまま
+  // 発言するが、実際の提示価格にはそのボーナスが上乗せで適用されているため、
+  // 何も説明が無いと「言った額と違う」と参加者に不信感を持たれる(実際に指摘を受けた)。
+  // ボーナスがある時だけ、上乗せで安くなっている旨を明示する。
+  const bonusNote = $("bonusNote");
+  if (bonus > 0) {
+    bonusNote.textContent = `(会話の内容が良かったので、店番が言った金額からさらに${bonus} ICHIGO安くなっています)`;
+    bonusNote.classList.remove("hidden");
+  } else {
+    bonusNote.classList.add("hidden");
+  }
 }
 
 function enterPaymentPhase(price) {
@@ -521,7 +533,7 @@ async function startNegotiation(nameToSubmit) {
   }
 
   renderTranscript(data.transcript);
-  setNegotiationUiState(data.price, data.turn, data.maxTurn);
+  setNegotiationUiState(data.price, data.turn, data.maxTurn, data.bonus);
   $("nameSection").classList.add("hidden");
   $("chatSection").classList.remove("hidden");
 }
@@ -550,7 +562,7 @@ async function sendChatMessage(message) {
       return;
     }
     appendBubble("assistant", data.reply);
-    setNegotiationUiState(data.price, data.turn, data.maxTurn);
+    setNegotiationUiState(data.price, data.turn, data.maxTurn, data.bonus);
     if (data.done) {
       // 送信直後にすぐ支払い画面へ切り替えると、AIの最後の返答を読む前に画面が
       // 変わってしまう(「送ったら即座に画面が変わる」という指摘)。少し待ってから切り替える。

@@ -576,6 +576,7 @@ app.post('/negotiate-start', (req, res) => {
         mode: existing.mode,
         displayName: existing.displayName,
         price: existing.currentPrice,
+        bonus: existing.basePrice - existing.currentPrice,
         turn: existing.turnCount,
         maxTurn: NEGOTIATE_MAX_TURNS_NUM,
         transcript: existing.transcript,
@@ -621,6 +622,7 @@ app.post('/negotiate-start', (req, res) => {
     mode: session.mode,
     displayName: session.displayName,
     price: session.currentPrice,
+    bonus: session.basePrice - session.currentPrice, // 新規セッションは常に0(startingPriceのまま)
     turn: session.turnCount,
     maxTurn: NEGOTIATE_MAX_TURNS_NUM,
     transcript: session.transcript,
@@ -726,6 +728,13 @@ app.post('/negotiate-message', async (req, res) => {
       ok: true,
       reply: replyText,
       price: session.currentPrice,
+      // basePrice(AIが口にした、会話の質ボーナスを含まない生の値切り価格)とcurrentPrice
+      // (ボーナス込みの実際の価格)の差。AIは自分の発言(reply)内でbasePrice相当の
+      // 金額をそのまま口にする一方、実際に確定するのはボーナス込みのcurrentPriceなので、
+      // 何も説明が無いと「言った額と違う」と参加者に不信感を持たれる。ボーナス分だけを
+      // 画面に明示することで、これを「機転が良かったから追加で安くなった」という
+      // 分かりやすい上乗せ情報として見せる(2026-07-08、参加者からの指摘を受けて追加)。
+      bonus: session.basePrice - session.currentPrice,
       turn: session.turnCount,
       maxTurn: NEGOTIATE_MAX_TURNS_NUM,
       status: session.status,
