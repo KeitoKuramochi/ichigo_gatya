@@ -90,6 +90,7 @@
   <p id="status"></p>
 
 <script type="module">
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 const OP_CHAIN_ID = 10;
 const TOKEN_ADDR = "0x836700463Dce76D9Cc3CDf6F6EDF946312c01869";
 const GAME_WALLET = "0x70775B1d24176De0fda2776303B8a603C671cFFb"; // 授業のDiscord IDに紐づく自分のウォレット
@@ -203,6 +204,18 @@ function enterManualWaitingView(price) {
 
 async function ensureOptimism() {
   const hexId = "0x" + OP_CHAIN_ID.toString(16);
+
+  // すでにOptimismに繋がっている場合は切り替えリクエスト自体を送らない。
+  // スマホのウォレットアプリの中には、既に対象チェーンにいてもwallet_switchEthereumChainの
+  // 確認ダイアログを毎回出してしまうものがあり、不要な確認をユーザーに見せない・
+  // 不要なリクエストで失敗する余地を減らすための防御。
+  try {
+    const currentChainId = await window.ethereum.request({ method: "eth_chainId" });
+    if (currentChainId?.toLowerCase() === hexId) return true;
+  } catch {
+    // 取得に失敗しても、この後の切り替えリクエストで最終的に判明するので無視する
+  }
+
   try {
     await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hexId }] });
     return true;
@@ -220,7 +233,13 @@ async function ensureOptimism() {
       });
       return true;
     }
-    showStatus("Optimismネットワークへの切り替えに失敗しました: " + (err.message || err), "err");
+    // 4902(未登録チェーン)以外の失敗は、ウォレット側が自動切り替え自体に
+    // 対応していない(例: 一部のスマホ用ウォレット)場合にも起こる。その場合は
+    // 諦めずに、手動での切り替えをお願いする文言に変える。
+    showStatus(
+      "Optimismネットワークへの切り替えに失敗しました。お使いのウォレットアプリ側でOptimismネットワークに手動で切り替えてから、もう一度お試しください: " + (err.message || err),
+      "err"
+    );
     return false;
   }
 }
@@ -534,13 +553,31 @@ async function sendChatMessage(message) {
 
 $("connectBtn").addEventListener("click", async () => {
   if (!window.ethereum) {
-    showStatus("ウォレットが見つかりません。MetaMaskアプリ内のブラウザでこのページを開いてください", "err");
+    // QRコードをスマホの標準カメラ/ブラウザ(Safari・Chrome等)で開いた場合、
+    // window.ethereumは注入されない(MetaMaskアプリの中のブラウザでしか使えない)。
+    // 「MetaMaskアプリ内で開いてください」という文言だけでは、参加者が自分で
+    // リンクをコピーしてMetaMaskに貼り直す必要があり、これが実質的にスマホからの
+    // 接続がうまくいかない主因になっていた。MetaMask公式のディープリンクへ自動で
+    // 飛ばし(今開いているURLをそのまま引き継ぐ)、MetaMaskがインストール済みなら
+    // その中のブラウザでこのページが開き直る(未インストールならストアへ誘導される)。
+    // ユーザー操作(クリック)に対する直接の応答として同期的に遷移させる必要があるため、
+    // ここでawaitを挟まずに即座にlocation.hrefを書き換える。
+    if (IS_MOBILE) {
+      const target = location.href.replace(/^https?:\/\//, "");
+      location.href = `https://metamask.app.link/dapp/${target}`;
+      return;
+    }
+    showStatus("ウォレットが見つかりません。MetaMaskなどのウォレット拡張機能をブラウザに追加してください", "err");
     return;
   }
   try {
-    if (!(await ensureOptimism())) return;
+    // 先にアカウント接続(eth_requestAccounts)を確立してから、チェーン切り替えを行う。
+    // 逆の順序(接続前にwallet_switchEthereumChainを呼ぶ)だと、スマホのウォレット
+    // アプリの一部でこのサイトがまだ「接続済み」と認識されておらず、切り替え確認が
+    // 出ないまま無反応になることがあった(スマホでの接続が不安定だった主因の1つ)。
     provider = new ethers.BrowserProvider(window.ethereum);
     await provider.send("eth_requestAccounts", []);
+    if (!(await ensureOptimism())) return;
     signer = await provider.getSigner();
     account = await signer.getAddress();
     token = new ethers.Contract(TOKEN_ADDR, ERC20_ABI, signer);
