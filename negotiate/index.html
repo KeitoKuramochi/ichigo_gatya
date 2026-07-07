@@ -30,6 +30,8 @@
   .receipt { border: 2px solid var(--pink); border-radius: 12px; padding: 16px; margin: 12px 0; }
   .receipt h2 { margin: 0 0 8px; font-size: 1.2rem; }
   .receiptRow { margin: 4px 0; }
+  .resolutionButtons { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+  .secondaryBtn { background: #888; }
 </style>
 </head>
 <body>
@@ -75,6 +77,14 @@
     <p class="receiptRow muted" id="receiptTimeLabel"></p>
     <p class="receiptRow" id="receiptUnlockStatus"></p>
     <p class="receiptRow muted" id="receiptTxHashLabel"></p>
+    <div id="receiptResolutionSection" class="hidden">
+      <p class="receiptRow" id="resolutionPrompt"></p>
+      <div class="resolutionButtons">
+        <button id="resolveYesBtn">はい、受け取れました</button>
+        <button id="resolveNoBtn" class="secondaryBtn">まだです、スタッフを呼びます</button>
+      </div>
+    </div>
+    <p class="receiptRow ok hidden" id="receiptThanks">ICHIGOガチャガチャのご利用、ありがとうございました!</p>
   </div>
 
   <p id="status"></p>
@@ -103,6 +113,7 @@ let sessionId = null;
 let displayName = null;
 let finalPrice = null;
 let manualPollHandle = null;
+let currentReceipt = null; // 「解決した/まだ」ボタンのハンドラが参照する、今表示中のレシート
 
 function readJSON(key) {
   try {
@@ -234,20 +245,66 @@ async function waitForUnlock(txHash) {
   return "timeout";
 }
 
-function renderReceiptUnlockStatus(status) {
+// 解除がtimeout/failedになった参加者は、スタッフに直接対応してもらった後もこの画面に
+// エラー文言が出たまま固まって見えてしまう(「このまま止まってしまう」という指摘)。
+// スタッフに確認してもらえたかどうかを参加者自身に選んでもらい、解決済みなら
+// お礼の文言に切り替える(サーバー側に解決したかを知る手段が無いため、自己申告制)。
+function renderResolutionChoice(receipt) {
+  $("receiptResolutionSection").classList.remove("hidden");
+  if (receipt.resolution === "pending") {
+    // 一度「まだです」を選んだ後は、再度「まだです」を押す必要は無いので隠す
+    $("resolutionPrompt").textContent = "スタッフの対応が終わったら、下のボタンを押してください。";
+    $("resolveNoBtn").classList.add("hidden");
+  } else {
+    $("resolutionPrompt").textContent = "スタッフに確認してもらえましたか?";
+    $("resolveNoBtn").classList.remove("hidden");
+  }
+}
+
+function updateReceiptStatusUI(receipt) {
+  currentReceipt = receipt;
   const el = $("receiptUnlockStatus");
+
+  if (receipt.resolution === "resolved") {
+    // 解決済みなら、エラー文言・txHash・選択ボタンは不要でお礼だけ見せる
+    el.textContent = "";
+    $("receiptTxHashLabel").classList.add("hidden");
+    $("receiptResolutionSection").classList.add("hidden");
+    $("receiptThanks").classList.remove("hidden");
+    return;
+  }
+  $("receiptTxHashLabel").classList.remove("hidden");
+  $("receiptThanks").classList.add("hidden");
+
+  const status = receipt.unlockStatus;
   if (!status || status === "pending" || status === "unknown") {
     el.textContent = "ガチャガチャを解除しています…";
     el.className = "receiptRow";
+    $("receiptResolutionSection").classList.add("hidden");
   } else if (status === "unlocked") {
     el.textContent = "解除完了!カプセルをお受け取りください";
     el.className = "receiptRow ok";
+    $("receiptResolutionSection").classList.add("hidden");
   } else {
     const reason = status === "timeout" ? "解除確認がタイムアウトしました" : "実機の解除に失敗しました";
     el.textContent = `${reason}。このtxHashをスタッフにお見せください`;
     el.className = "receiptRow err";
+    renderResolutionChoice(receipt);
   }
 }
+
+$("resolveYesBtn").addEventListener("click", () => {
+  if (!currentReceipt) return;
+  currentReceipt.resolution = "resolved";
+  writeJSON(RECEIPT_STORAGE_KEY, currentReceipt);
+  updateReceiptStatusUI(currentReceipt);
+});
+$("resolveNoBtn").addEventListener("click", () => {
+  if (!currentReceipt) return;
+  currentReceipt.resolution = "pending";
+  writeJSON(RECEIPT_STORAGE_KEY, currentReceipt);
+  updateReceiptStatusUI(currentReceipt);
+});
 
 // 決済成功の証拠画面を描画する。仮に機材(ESP32)側でトラブルがあっても、
 // この画面自体(名前・金額・時刻・txHash)は消えないので、参加者がスタッフに
@@ -263,7 +320,7 @@ function renderReceipt(receipt) {
   $("receiptPriceLabel").textContent = receipt.price;
   $("receiptTimeLabel").textContent = "支払い時刻: " + new Date(receipt.paidAt).toLocaleString("ja-JP");
   $("receiptTxHashLabel").textContent = "txHash: " + receipt.txHash;
-  renderReceiptUnlockStatus(receipt.unlockStatus);
+  updateReceiptStatusUI(receipt);
   $("receiptSection").classList.remove("hidden");
 }
 
@@ -278,7 +335,7 @@ function enterReceiptPhase({ wallet, displayName, price, txHash, sessionId }) {
   waitForUnlock(txHash).then((status) => {
     receipt.unlockStatus = status;
     writeJSON(RECEIPT_STORAGE_KEY, receipt);
-    renderReceiptUnlockStatus(status);
+    updateReceiptStatusUI(receipt);
   });
 }
 
@@ -298,7 +355,7 @@ function tryRestoreReceipt() {
     waitForUnlock(receipt.txHash).then((status) => {
       receipt.unlockStatus = status;
       writeJSON(RECEIPT_STORAGE_KEY, receipt);
-      renderReceiptUnlockStatus(status);
+      updateReceiptStatusUI(receipt);
     });
   }
   return true;
@@ -363,7 +420,7 @@ async function tryRestoreReceiptFromServer(wallet) {
     waitForUnlock(receipt.txHash).then((status) => {
       receipt.unlockStatus = status;
       writeJSON(RECEIPT_STORAGE_KEY, receipt);
-      renderReceiptUnlockStatus(status);
+      updateReceiptStatusUI(receipt);
     });
   }
   return true;
