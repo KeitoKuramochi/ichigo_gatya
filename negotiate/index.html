@@ -99,7 +99,7 @@ const ERC20_ABI = [
   "function transfer(address to, uint256 amount) returns (bool)",
 ];
 const UNLOCK_POLL_MS = 1500;
-const UNLOCK_POLL_MAX_TRIES = 30; // 約45秒。bridge側のESP32タイムアウト(30秒)+余裕分
+const UNLOCK_POLL_MAX_TRIES = 30; // 約45秒。bridge側のESP32タイムアウト(45秒)と揃えている
 const MANUAL_POLL_MS = 2000; // manualモード(店員と対面交渉)待機中、価格確定を待つポーリング間隔
 const RECEIPT_STORAGE_KEY = "ichigo_receipt";
 const RECEIPT_TTL_MS = 30 * 60 * 1000; // 決済証拠画面。古い受け取りを別の人に見せてしまわないための期限
@@ -282,12 +282,13 @@ function updateReceiptStatusUI(receipt) {
     el.className = "receiptRow";
     $("receiptResolutionSection").classList.add("hidden");
   } else if (status === "unlocked") {
-    el.textContent = "解除完了!カプセルをお受け取りください";
+    el.textContent = "解除できました!カプセルをお受け取りください";
     el.className = "receiptRow ok";
     $("receiptResolutionSection").classList.add("hidden");
   } else {
-    const reason = status === "timeout" ? "解除確認がタイムアウトしました" : "実機の解除に失敗しました";
-    el.textContent = `${reason}。このtxHashをスタッフにお見せください`;
+    // timeout(結果報告が届かなかった)/failed(ESP32が失敗と報告)を参加者に区別して
+    // 見せる意味は無い(どちらも「受け取れたかどうか」だけが重要)ため、1つの文言にまとめた。
+    el.textContent = "解除できませんでした。このtxHashをスタッフにお見せください";
     el.className = "receiptRow err";
     renderResolutionChoice(receipt);
   }
