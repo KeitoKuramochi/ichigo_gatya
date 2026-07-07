@@ -30,7 +30,6 @@
   .receipt { border: 2px solid var(--pink); border-radius: 12px; padding: 16px; margin: 12px 0; }
   .receipt h2 { margin: 0 0 8px; font-size: 1.2rem; }
   .receiptRow { margin: 4px 0; }
-  .clearBtn { background: #888; margin-top: 12px; }
 </style>
 </head>
 <body>
@@ -76,7 +75,6 @@
     <p class="receiptRow muted" id="receiptTimeLabel"></p>
     <p class="receiptRow" id="receiptUnlockStatus"></p>
     <p class="receiptRow muted" id="receiptTxHashLabel"></p>
-    <button id="clearReceiptBtn" class="clearBtn">この画面を消す(別の人が使う場合)</button>
   </div>
 
   <p id="status"></p>
@@ -306,6 +304,71 @@ function tryRestoreReceipt() {
   return true;
 }
 
+// localStorageのレシートが(ブラウザ/ウォレットアプリがタブを破棄する等で)消えてしまった
+// 場合の保険。ウォレット接続直後にサーバー側の記録(/negotiate-receipt)へ直近の購入が
+// 無いか問い合わせ、見つかればそこから復元する。何度リロード・再接続してもレシートが
+// 消えたままにならないようにするための仕組み。
+//
+// wallet単体だけでは誰でも他人のレシート(ニックネーム・支払額等)を見られてしまうため、
+// サーバーが発行したnonceにMetaMaskで署名し、本人のウォレットであることを証明してから
+// 問い合わせる(セキュリティレビューで指摘、2026-07-07修正)。
+async function tryRestoreReceiptFromServer(wallet) {
+  let nonceData;
+  try {
+    const nonceRes = await fetch("/negotiate-receipt-challenge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wallet }),
+    });
+    nonceData = await nonceRes.json();
+  } catch {
+    return false;
+  }
+  if (!nonceData.ok) return false;
+
+  let signature;
+  try {
+    signature = await signer.signMessage(nonceData.nonce);
+  } catch {
+    // 署名を拒否/失敗した場合はレシート復元をあきらめ、通常の交渉開始フローに進む
+    // (レシートが無い参加者にとってはこれが正常なパスなので、エラー表示はしない)。
+    return false;
+  }
+
+  let data;
+  try {
+    const res = await fetch("/negotiate-receipt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wallet, signature }),
+    });
+    data = await res.json();
+  } catch {
+    return false;
+  }
+  if (!data.ok || !data.found) return false;
+
+  const receipt = {
+    wallet,
+    displayName: data.displayName,
+    price: data.price,
+    txHash: data.txHash,
+    sessionId: null,
+    paidAt: data.paidAt,
+    unlockStatus: data.unlockStatus,
+  };
+  writeJSON(RECEIPT_STORAGE_KEY, receipt);
+  renderReceipt(receipt);
+  if (!receipt.unlockStatus || receipt.unlockStatus === "pending" || receipt.unlockStatus === "unknown") {
+    waitForUnlock(receipt.txHash).then((status) => {
+      receipt.unlockStatus = status;
+      writeJSON(RECEIPT_STORAGE_KEY, receipt);
+      renderReceiptUnlockStatus(status);
+    });
+  }
+  return true;
+}
+
 if (window.ethereum) {
   window.ethereum.on("accountsChanged", (accounts) => {
     if (!accounts.length || !signer) return; // まだ接続前なら何もしない
@@ -368,6 +431,8 @@ async function startNegotiation(nameToSubmit) {
   $("chatSection").classList.remove("hidden");
 }
 
+const FINAL_REPLY_READ_MS = 1800; // 交渉成立直後、AIの最後の返答を読めるように支払い画面への切り替えを少し待つ
+
 async function sendChatMessage(message) {
   const userBubble = appendBubble("user", message);
   $("sendBtn").disabled = true;
@@ -385,16 +450,25 @@ async function sendChatMessage(message) {
       userBubble.remove();
       $("chatInput").value = message;
       showStatus(data.error || "送信に失敗しました", "err");
+      $("sendBtn").disabled = false;
+      $("finalizeBtn").disabled = false;
       return;
     }
     appendBubble("assistant", data.reply);
     setNegotiationUiState(data.price, data.turn, data.maxTurn);
-    if (data.done) enterPaymentPhase(data.price);
+    if (data.done) {
+      // 送信直後にすぐ支払い画面へ切り替えると、AIの最後の返答を読む前に画面が
+      // 変わってしまう(「送ったら即座に画面が変わる」という指摘)。少し待ってから切り替える。
+      showStatus("交渉成立!支払い画面に切り替わります…", "ok");
+      setTimeout(() => enterPaymentPhase(data.price), FINAL_REPLY_READ_MS);
+      return; // ボタンはenterPaymentPhaseで画面自体が隠れるまで無効のままにする
+    }
+    $("sendBtn").disabled = false;
+    $("finalizeBtn").disabled = false;
   } catch (err) {
     userBubble.remove();
     $("chatInput").value = message;
     showStatus("送信に失敗しました: " + (err.message || err), "err");
-  } finally {
     $("sendBtn").disabled = false;
     $("finalizeBtn").disabled = false;
   }
@@ -418,6 +492,11 @@ $("connectBtn").addEventListener("click", async () => {
     await refreshBalance();
     $("connectBtn").disabled = true;
     showStatus("", "");
+
+    // localStorageのレシートが消えてしまっていても、サーバー側に直近の購入記録が
+    // 残っていればそこから復元する(何度再接続してもレシートが消えたままにならない
+    // ようにするための保険)。見つかった場合はここで終了し、通常の交渉開始には進まない。
+    if (await tryRestoreReceiptFromServer(account)) return;
 
     // すでにこのウォレットで交渉を始めていた(ページ再読み込み等)場合は、名前入力を
     // 再度求めず、そのまま再開する。しおり自体が古すぎる(TTL超過)場合は無視して
@@ -457,7 +536,12 @@ $("sendBtn").addEventListener("click", () => {
   sendChatMessage(message);
 });
 $("chatInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") $("sendBtn").click();
+  if (e.key !== "Enter") return;
+  // 日本語入力(IME)中に変換を確定するEnterもkeydownで"Enter"として来てしまい、
+  // 変換確定のつもりが誤送信になっていた(isComposing/keyCode 229で判別して無視する)。
+  if (e.isComposing || e.keyCode === 229) return;
+  e.preventDefault();
+  $("sendBtn").click();
 });
 
 $("finalizeBtn").addEventListener("click", async () => {
@@ -523,12 +607,6 @@ $("payBtn").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
   }
-});
-
-$("clearReceiptBtn").addEventListener("click", () => {
-  localStorage.removeItem(RECEIPT_STORAGE_KEY);
-  localStorage.removeItem(SESSION_STORAGE_KEY);
-  location.reload();
 });
 
 // ページ読み込み時、有効期限内の証拠画面が残っていればそれを最優先で表示する

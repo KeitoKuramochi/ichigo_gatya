@@ -11,6 +11,7 @@
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const GEMINI_API_URL_TEMPLATE = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent';
+const CLOUDFLARE_API_URL_TEMPLATE = 'https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/run/{model}';
 const REQUEST_TIMEOUT_MS = 15 * 1000;
 
 function buildSystemPrompt({ startingPrice, floorPrice, turnCount, maxTurns, displayName }) {
@@ -176,6 +177,82 @@ async function callGemini({ transcript, startingPrice, floorPrice, turnCount, ma
   }
 }
 
+// テスト専用: Cloudflare Workers AI(無料枠1日1万ニューロン)で交渉を進める。
+// 本番のAnthropic/Geminiの利用枠・課金を一切消費せずに動作確認したい時に使う
+// (呼び出し側でCF_ACCOUNT_ID/CF_API_TOKENが設定されている場合だけ、Anthropic/Geminiより
+// 先にこちらだけを使い、Anthropic/Geminiには一切問い合わせない)。
+// Workers AIのfunction callingはOpenAI形式(tool_calls[].function.argumentsがJSON文字列)
+// なので、Anthropic/Geminiと違ってここだけJSON.parseが必要。
+async function callCloudflareWorkersAI({ transcript, startingPrice, floorPrice, turnCount, maxTurns, displayName, accountId, apiToken, model }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const url = CLOUDFLARE_API_URL_TEMPLATE.replace('{accountId}', accountId).replace('{model}', model);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiToken}`,
+      },
+      body: JSON.stringify({
+        messages: [
+          { role: 'system', content: buildSystemPrompt({ startingPrice, floorPrice, turnCount, maxTurns, displayName }) },
+          ...transcript.map((m) => ({ role: m.role, content: m.content })),
+        ],
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'quote',
+            description: '店番としての返答・今回提示する価格・この会話の質の評価を記録する',
+            parameters: {
+              type: 'object',
+              properties: {
+                reply: { type: 'string', description: '客への返答本文(日本語)' },
+                price: { type: 'number', description: '今回提示する価格(ICHIGO)' },
+                quality: { type: 'number', description: 'この会話全体の質(機転・説得力・楽しさ)。0〜100' },
+                done: { type: 'boolean', description: 'この価格で交渉を終了してよいか' },
+              },
+              required: ['reply', 'price', 'quality', 'done'],
+            },
+          },
+        }],
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      console.error(`Cloudflare Workers AIエラー: ${res.status} ${await res.text().catch(() => '')}`);
+      return null;
+    }
+
+    const data = await res.json();
+    // REST API(curl等)の応答は{result:{...}, success, errors, messages}の形式で包まれている
+    // (env.AI.run()を直接使うWorkers内バインディングとは形が異なる点に注意)。
+    const toolCall = data.result?.tool_calls?.[0];
+    let args = null;
+    if (toolCall) {
+      try {
+        args = typeof toolCall.function.arguments === 'string'
+          ? JSON.parse(toolCall.function.arguments)
+          : toolCall.function.arguments;
+      } catch {
+        args = null;
+      }
+    }
+    const normalized = normalizeQuoteInput(args);
+    if (!normalized) {
+      console.error('Cloudflare Workers AIの応答が期待した形式ではありません:', JSON.stringify(data).slice(0, 500));
+    }
+    return normalized;
+  } catch (err) {
+    console.error('Cloudflare Workers AI呼び出し中にエラー:', err.message || err);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // 戻り値: 成功時 {reply, price, quality, done}、両方の呼び出しが失敗(タイムアウト・API障害・
 // 想定外の応答形式)した場合はnull。nullの場合の扱い(価格を変えずに定型の詫び文言を出す等)は
 // 呼び出し側の責務。
@@ -190,7 +267,20 @@ export async function getNegotiationReply({
   model, // Anthropicモデル
   geminiApiKey, // 未設定ならGeminiフォールバックはスキップ
   geminiModel,
+  cloudflareAccountId, // テスト専用。設定されている場合はAnthropic/Geminiより先に使う
+  cloudflareApiToken,
+  cloudflareModel,
 }) {
+  // テスト専用の切り替え: Cloudflare Workers AIの認証情報が両方設定されていれば、
+  // Anthropic/Geminiには一切問い合わせずこちらだけを使う(本番の利用枠を守るため)。
+  // 本番(Render)側にはCF_ACCOUNT_ID/CF_API_TOKENを設定しないこと。
+  if (cloudflareAccountId && cloudflareApiToken) {
+    return callCloudflareWorkersAI({
+      transcript, startingPrice, floorPrice, turnCount, maxTurns, displayName,
+      accountId: cloudflareAccountId, apiToken: cloudflareApiToken, model: cloudflareModel,
+    });
+  }
+
   const primary = await callAnthropic({ transcript, startingPrice, floorPrice, turnCount, maxTurns, displayName, apiKey, model });
   if (primary) return primary;
 

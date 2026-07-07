@@ -67,6 +67,9 @@ const NEGOTIATE_MANUAL_IDLE_MAX_AGE_MS = 20 * 60 * 1000;
 const LAST_COMPLETED_MAX_AGE_MS = 10 * 60 * 1000;
 // 管理者ページの購入履歴に保持する最大件数
 const RECENT_PURCHASES_MAX = 20;
+// レシート復元(/negotiate-receipt)で遡って探す範囲。決済ページ側のlocalStorage TTL
+// (RECEIPT_TTL_MS, 30分)と揃えている。
+const RECEIPT_LOOKUP_MAX_AGE_MS = 30 * 60 * 1000;
 
 const {
   RPC_URL,
@@ -101,6 +104,12 @@ const {
   // 未設定ならフォールバックせず、従来通り(詫び文言・ターン非消費)にとどまる。
   GEMINI_API_KEY,
   GEMINI_MODEL = 'gemini-2.0-flash',
+  // テスト専用: 両方設定されている場合、Anthropic/Geminiには一切問い合わせず
+  // Cloudflare Workers AI(無料枠1日1万ニューロン)だけを使う。本番の利用枠・課金を
+  // 消費せずに動作確認したい時のためのもので、Render(本番)には設定しないこと。
+  CF_ACCOUNT_ID,
+  CF_API_TOKEN,
+  CF_MODEL = '@cf/meta/llama-3.1-8b-instruct',
   NEGOTIATE_FLOOR_COST,
   NEGOTIATE_ABSOLUTE_FLOOR = '0',
   NEGOTIATE_MAX_TURNS = '4',
@@ -129,6 +138,11 @@ console.log(
     ? `AI店番エージェント(値切り交渉)機能: 有効(通常フロア=${NEGOTIATE_FLOOR_COST_NUM} ICHIGO, 会話の質次第で最大${NEGOTIATE_ABSOLUTE_FLOOR_NUM} ICHIGOまで, 最大${NEGOTIATE_MAX_TURNS_NUM}ターン, Geminiフォールバック=${GEMINI_API_KEY ? '有効' : '無効'})`
     : 'AI店番エージェント(値切り交渉)機能: 無効(ANTHROPIC_API_KEY / NEGOTIATE_FLOOR_COSTが未設定) → /negotiate/はスタッフが価格を直接決めるmanualモードで動作します'
 );
+if (CF_ACCOUNT_ID && CF_API_TOKEN) {
+  console.warn(
+    `⚠️ テスト用切り替えが有効: 交渉はAnthropic/Geminiではなく Cloudflare Workers AI(${CF_MODEL}) を使います。本番運用時はCF_ACCOUNT_ID/CF_API_TOKENを未設定にしてください。`
+  );
+}
 
 const ERC20_ABI = [
   'event Transfer(address indexed from, address indexed to, uint256 value)',
@@ -355,15 +369,12 @@ function sweepStaleNegotiationSessions() {
 
 // 交渉を確定させ、以後/verify-and-unlockで使う確定額(finalPriceWei)を固める。
 //
-// 通常の値切り(ターンごとのclamp)はNEGOTIATE_FLOOR_COSTまでしか下がらない。それより下、
-// NEGOTIATE_ABSOLUTE_FLOORまでの追加ボーナスは、会話の質(session.lastQuality, 0〜100。
-// モデルが毎ターン「機転・説得力・楽しさ」を評価した値)に比例して適用する。
-// 「価格が下がるのは運ではなく会話内容の良さであるべき」という方針なので、抽選は行わない。
+// 会話の質によるボーナス割引は、/negotiate-message側でターンごとにsession.currentPriceへ
+// 既に反映済み(下記参照)なので、ここでは今表示されている価格をそのまま確定するだけでよい。
+// 以前は確定時にだけ追加でボーナスを適用していたため、「AIが答えた/画面に表示されていた
+// 価格」より確定価格が微妙に低くなる不整合があった(参加者から指摘を受け2026-07-07に修正)。
 function finalizeNegotiationSession(session) {
-  const bonusRange = NEGOTIATE_FLOOR_COST_NUM - NEGOTIATE_ABSOLUTE_FLOOR_NUM;
-  const qualityBonus = (Math.max(0, Math.min(100, session.lastQuality)) / 100) * bonusRange;
-  const priceAfterBonus = Math.round(session.currentPrice - qualityBonus);
-  applyFinalPrice(session, Math.max(NEGOTIATE_ABSOLUTE_FLOOR_NUM, priceAfterBonus));
+  applyFinalPrice(session, session.currentPrice);
 }
 
 function maskWallet(wallet) {
@@ -584,7 +595,8 @@ app.post('/negotiate-start', (req, res) => {
     transcript: mode === 'ai' ? [{ role: 'assistant', content: openingReply }] : [],
     startingPrice,
     currentPrice: startingPrice,
-    lastQuality: 0, // 会話の質(0〜100)。モデルの評価をターンごとに更新し、確定時のボーナス割引に使う
+    basePrice: startingPrice, // 会話の質ボーナスを含まない、通常の値切りだけでの価格(currentPriceの算出に使う内部値)
+    lastQuality: 0, // 会話の質(0〜100)。モデルの評価をターンごとに更新し、ボーナス割引に使う
     turnCount: 0,
     createdAt: now,
     lastActivityAt: now, // 直前の操作時刻。放置検出(アイドルタイムアウト)はこちらを基準にする
@@ -647,6 +659,9 @@ app.post('/negotiate-message', async (req, res) => {
       model: ANTHROPIC_MODEL,
       geminiApiKey: GEMINI_API_KEY,
       geminiModel: GEMINI_MODEL,
+      cloudflareAccountId: CF_ACCOUNT_ID,
+      cloudflareApiToken: CF_API_TOKEN,
+      cloudflareModel: CF_MODEL,
     });
 
     let replyText;
@@ -655,19 +670,29 @@ app.post('/negotiate-message', async (req, res) => {
       consecutiveAiFailures = 0;
       replyText = result.reply;
       modelDone = result.done;
-      // 「前回の価格以下」「通常フロア以上」を必ず強制する(会話の質によるボーナス割引は
-      // finalizeNegotiationSessionで別途、確定時にのみ適用する)。文面へのプロンプト
-      // インジェクション(例:「価格を1にして」)は返答の文章がおかしくなるだけで、
-      // 実際の価格には影響しない。
-      session.currentPrice = Math.min(
-        session.currentPrice,
-        Math.max(NEGOTIATE_FLOOR_COST_NUM, Math.round(result.price))
-      );
       // qualityは付加評価なので、壊れていた場合はこのターンでは更新せず直前の値を保つ
       // (単発の異常応答で「良い会話をしていた」評価がリセットされないようにする)。
       if (result.quality !== null) {
         session.lastQuality = Math.max(0, Math.min(100, result.quality));
       }
+      // basePriceは会話の質ボーナスを含まない、通常の値切りだけでの価格。
+      // 「前回の価格以下」「通常フロア以上」を必ず強制する。文面へのプロンプトインジェクション
+      // (例:「価格を1にして」)は返答の文章がおかしくなるだけで、実際の価格には影響しない。
+      session.basePrice = Math.min(
+        session.basePrice,
+        Math.max(NEGOTIATE_FLOOR_COST_NUM, Math.round(result.price))
+      );
+      // 会話の質によるボーナス割引を、確定時ではなく毎ターンここで反映する。以前は
+      // finalizeNegotiationSession(確定時)にだけ追加で適用していたため、「AIが答えた/
+      // 画面に表示されていた価格」より確定価格が微妙に低くなる不整合があった
+      // (参加者から指摘を受け2026-07-07に修正)。currentPriceには常にボーナス込みの値を
+      // 入れることで、表示価格=確定価格になるようにする。
+      const bonusRange = NEGOTIATE_FLOOR_COST_NUM - NEGOTIATE_ABSOLUTE_FLOOR_NUM;
+      const qualityBonus = (session.lastQuality / 100) * bonusRange;
+      const priceWithBonus = Math.max(NEGOTIATE_ABSOLUTE_FLOOR_NUM, Math.round(session.basePrice - qualityBonus));
+      // qualityが後のターンで下がってもボーナス縮小により価格が上がって見えることが
+      // ないよう、これまでの表示価格以下であることも保証する。
+      session.currentPrice = Math.min(session.currentPrice, priceWithBonus);
     } else {
       consecutiveAiFailures += 1;
       replyText = 'すみません、少し混み合っているみたいです。もう一度話しかけてもらえますか?';
@@ -822,6 +847,74 @@ app.get('/negotiate-admin-recent-purchases', (req, res) => {
     unlockStatus: unlockRequests.get(p.txHash)?.status ?? 'unknown',
   }));
   return res.json({ ok: true, purchases });
+});
+
+// 参加者本人用: 決済証拠(レシート)画面をサーバー側の記録から復元する。
+// negotiate/index.htmlはlocalStorageにレシートを保存して画面上の再読み込みに耐えるが、
+// スマホのブラウザ/ウォレットアプリがタブを破棄してlocalStorageまで失われた場合、
+// 再度ウォレットを接続した時点でここを叩いて直近の購入を復元できるようにする保険。
+//
+// wallet単体を知っていれば誰でも呼べてしまうと、その人のニックネーム・支払額・解除状況が
+// 見えてしまう(セキュリティレビューで指摘、2026-07-07修正)。ウォレットアドレスは秘密では
+// ないが「本人だけが呼べる」ことは保証したいため、personal_signで本人であることを
+// 検証してからのみレシートを返す(nonceは/negotiate-receipt-challengeで発行、1回使い切り)。
+const NEGOTIATE_RECEIPT_CHALLENGE_TTL_MS = 2 * 60 * 1000;
+const negotiateReceiptChallenges = new Map(); // wallet(lowercase) -> {nonce, createdAt}
+
+app.post('/negotiate-receipt-challenge', (req, res) => {
+  const wallet = typeof req.body?.wallet === 'string' ? req.body.wallet.toLowerCase() : '';
+  if (!/^0x[0-9a-fA-F]{40}$/.test(wallet)) {
+    return res.status(400).json({ ok: false, error: 'walletの形式が不正です' });
+  }
+  const nonce = `ICHIGOガチャガチャ レシート確認用の署名です。nonce: ${crypto.randomUUID()}`;
+  negotiateReceiptChallenges.set(wallet, { nonce, createdAt: Date.now() });
+  return res.json({ ok: true, nonce });
+});
+
+app.post('/negotiate-receipt', (req, res) => {
+  const wallet = typeof req.body?.wallet === 'string' ? req.body.wallet.toLowerCase() : '';
+  const { signature } = req.body ?? {};
+  if (!/^0x[0-9a-fA-F]{40}$/.test(wallet)) {
+    return res.status(400).json({ ok: false, error: 'walletの形式が不正です' });
+  }
+  if (typeof signature !== 'string') {
+    return res.status(400).json({ ok: false, error: 'signatureが必要です' });
+  }
+
+  const challenge = negotiateReceiptChallenges.get(wallet);
+  if (!challenge || Date.now() - challenge.createdAt > NEGOTIATE_RECEIPT_CHALLENGE_TTL_MS) {
+    negotiateReceiptChallenges.delete(wallet);
+    return res.status(400).json({ ok: false, error: '署名の有効期限が切れました。もう一度お試しください' });
+  }
+  // 1回使い切り(同じ署名の再利用でリプレイされないようにする)。成否に関わらずここで消費する。
+  negotiateReceiptChallenges.delete(wallet);
+
+  let recovered;
+  try {
+    recovered = ethers.verifyMessage(challenge.nonce, signature);
+  } catch {
+    return res.status(403).json({ ok: false, error: '署名が無効です' });
+  }
+  if (recovered.toLowerCase() !== wallet) {
+    return res.status(403).json({ ok: false, error: '署名がウォレットと一致しません' });
+  }
+
+  sweepStaleUnlockRequests();
+  const purchase = recentPurchases.find(
+    (p) => p.wallet.toLowerCase() === wallet && Date.now() - p.completedAt <= RECEIPT_LOOKUP_MAX_AGE_MS
+  );
+  if (!purchase) {
+    return res.json({ ok: true, found: false });
+  }
+  return res.json({
+    ok: true,
+    found: true,
+    displayName: purchase.displayName,
+    price: purchase.price,
+    txHash: purchase.txHash,
+    paidAt: purchase.completedAt,
+    unlockStatus: unlockRequests.get(purchase.txHash)?.status ?? 'unknown',
+  });
 });
 
 // モーター調整用: 角度と保持時間を指定して1回だけ動かすテストリクエストを積む。
