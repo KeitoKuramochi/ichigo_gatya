@@ -673,11 +673,9 @@ app.post('/negotiate-message', async (req, res) => {
     });
 
     let replyText;
-    let modelDone = false;
     if (result) {
       consecutiveAiFailures = 0;
       replyText = result.reply;
-      modelDone = result.done;
       // qualityは付加評価なので、壊れていた場合はこのターンでは更新せず直前の値を保つ
       // (単発の異常応答で「良い会話をしていた」評価がリセットされないようにする)。
       if (result.quality !== null) {
@@ -713,8 +711,13 @@ app.post('/negotiate-message', async (req, res) => {
     // (詫び文言は見せるが、もう一度同じ気持ちで話しかけ直せるようにする)。
     if (result) {
       session.turnCount += 1;
-      const hitMaxTurns = session.turnCount >= NEGOTIATE_MAX_TURNS_NUM;
-      if (hitMaxTurns || modelDone) {
+      // AIのdone判定(quoteツールのdoneフィールド)だけでは確定しない。「500円しか
+      // 持っていません」のような単なる値切りの訴えにも早期にdone:trueを返してしまい、
+      // まだ2ターン目なのに強制的に交渉が終わってしまう不具合が実際に起きたため
+      // (2026-07-07、参加者からの指摘を受けて修正)。この機能の目的は会話を楽しんで
+      // もらうことなので、最大ターン数に達するまでは必ず交渉を続けさせ、早く終えたい
+      // 場合は参加者自身が「この価格で決める」ボタン(/negotiate-finalize)を押す形に統一する。
+      if (session.turnCount >= NEGOTIATE_MAX_TURNS_NUM) {
         finalizeNegotiationSession(session);
       }
     }
