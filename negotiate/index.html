@@ -99,7 +99,7 @@ const ERC20_ABI = [
   "function transfer(address to, uint256 amount) returns (bool)",
 ];
 const UNLOCK_POLL_MS = 1500;
-const UNLOCK_POLL_MAX_TRIES = 20; // 約30秒。ESP32側のタイムアウト(15秒)+余裕分
+const UNLOCK_POLL_MAX_TRIES = 30; // 約45秒。bridge側のESP32タイムアウト(30秒)+余裕分
 const MANUAL_POLL_MS = 2000; // manualモード(店員と対面交渉)待機中、価格確定を待つポーリング間隔
 const RECEIPT_STORAGE_KEY = "ichigo_receipt";
 const RECEIPT_TTL_MS = 30 * 60 * 1000; // 決済証拠画面。古い受け取りを別の人に見せてしまわないための期限
