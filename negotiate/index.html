@@ -85,6 +85,7 @@
       </div>
     </div>
     <p class="receiptRow ok hidden" id="receiptThanks">ICHIGOガチャガチャのご利用、ありがとうございました!</p>
+    <button id="buyAgainBtn" class="secondaryBtn hidden">もう一度購入する</button>
   </div>
 
   <p id="status"></p>
@@ -290,6 +291,10 @@ function updateReceiptStatusUI(receipt) {
     $("receiptTxHashLabel").classList.add("hidden");
     $("receiptResolutionSection").classList.add("hidden");
     $("receiptThanks").classList.remove("hidden");
+    // 続けて自分でもう一度買いたい場合の再開ボタン。「別の人が使う場合」という
+    // 文言は実態(各参加者が自分のスマホを使う)に合わず一度削除したが、
+    // 本人が続けて買い直せる手段自体は必要だったため、文言を変えて復活させた。
+    $("buyAgainBtn").classList.remove("hidden");
     return;
   }
   $("receiptTxHashLabel").classList.remove("hidden");
@@ -300,16 +305,19 @@ function updateReceiptStatusUI(receipt) {
     el.textContent = "ガチャガチャを解除しています…";
     el.className = "receiptRow";
     $("receiptResolutionSection").classList.add("hidden");
+    $("buyAgainBtn").classList.add("hidden");
   } else if (status === "unlocked") {
     el.textContent = "解除できました!カプセルをお受け取りください";
     el.className = "receiptRow ok";
     $("receiptResolutionSection").classList.add("hidden");
+    $("buyAgainBtn").classList.remove("hidden");
   } else {
     // timeout(結果報告が届かなかった)/failed(ESP32が失敗と報告)を参加者に区別して
     // 見せる意味は無い(どちらも「受け取れたかどうか」だけが重要)ため、1つの文言にまとめた。
     el.textContent = "解除できませんでした。このtxHashをスタッフにお見せください";
     el.className = "receiptRow err";
     renderResolutionChoice(receipt);
+    $("buyAgainBtn").classList.add("hidden"); // 解決の自己申告(下記)より先に、もう一度買い直せてしまうと問題が埋もれるため隠す
   }
 }
 
@@ -324,6 +332,16 @@ $("resolveNoBtn").addEventListener("click", () => {
   currentReceipt.resolution = "pending";
   writeJSON(RECEIPT_STORAGE_KEY, currentReceipt);
   updateReceiptStatusUI(currentReceipt);
+});
+
+// 受け取り済みのレシートを消して、最初の接続画面からやり直す。以前は「別の人が
+// 使う場合」という文言だったが、実態(各参加者が自分のスマホを使う)に合わず
+// 削除していた。しかし本人が続けて2回目を買いたい場合にレシート画面から
+// 抜け出す手段が無くなってしまっていた(参加者からの指摘)ため、文言を変えて復活させた。
+$("buyAgainBtn").addEventListener("click", () => {
+  localStorage.removeItem(RECEIPT_STORAGE_KEY);
+  localStorage.removeItem(SESSION_STORAGE_KEY);
+  location.reload();
 });
 
 // 決済成功の証拠画面を描画する。仮に機材(ESP32)側でトラブルがあっても、
