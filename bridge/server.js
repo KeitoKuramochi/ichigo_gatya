@@ -517,6 +517,9 @@ app.post('/verify-and-unlock', async (req, res) => {
       displayName: session ? session.displayName : null,
       mode: session ? session.mode : 'direct',
       completedAt: Date.now(),
+      // レシート復元(/negotiate-receipt)経由でも会話を読み返せるように保持する
+      // (「会話が終わったらすぐ消えてしまう、読み返せて面白いのに」との指摘を受けて追加)。
+      transcript: session ? session.transcript : [],
     });
     if (recentPurchases.length > RECENT_PURCHASES_MAX) {
       recentPurchases.length = RECENT_PURCHASES_MAX;
@@ -934,6 +937,7 @@ app.post('/negotiate-receipt', (req, res) => {
     txHash: purchase.txHash,
     paidAt: purchase.completedAt,
     unlockStatus: unlockRequests.get(purchase.txHash)?.status ?? 'unknown',
+    transcript: purchase.transcript || [],
   });
 });
 

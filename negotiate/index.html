@@ -70,6 +70,8 @@
   <div id="paySection" class="hidden">
     <p class="priceLine">確定価格: <span id="finalPriceLabel"></span> ICHIGO</p>
     <button id="payBtn">② 支払ってガチャを回す</button>
+    <p class="muted" id="payChatLabel" style="margin-top:16px">ここまでの会話:</p>
+    <div class="chat" id="payChat"></div>
   </div>
 
   <div id="receiptSection" class="hidden receipt">
@@ -78,6 +80,8 @@
     <p class="receiptRow muted" id="receiptTimeLabel"></p>
     <p class="receiptRow" id="receiptUnlockStatus"></p>
     <p class="receiptRow muted" id="receiptTxHashLabel"></p>
+    <p class="muted hidden" id="receiptChatLabel" style="margin-top:16px">ここまでの会話:</p>
+    <div class="chat hidden" id="receiptChat"></div>
     <div id="receiptResolutionSection" class="hidden">
       <p class="receiptRow" id="resolutionPrompt"></p>
       <div class="resolutionButtons">
@@ -147,18 +151,42 @@ function stopManualPoll() {
   }
 }
 
-function appendBubble(role, content) {
+function appendBubbleTo(container, role, content) {
   const div = document.createElement("div");
   div.className = `bubble ${role === "user" ? "user" : "assistant"}`;
   div.textContent = content;
-  $("chat").appendChild(div);
-  $("chat").scrollTop = $("chat").scrollHeight;
-  return div; // 送信失敗時にこの吹き出しを取り消せるようにするため、要素を返す
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  return div;
+}
+
+// 会話のやり取り全体(chatTranscript)を、支払い画面・レシート画面でも読み返せるように
+// 保持する。以前は交渉が終わると同時にチャット欄自体が隠れて会話が消えてしまい、
+// 「読み返せて面白いのに、すぐ消えてしまう」という指摘を受けたため。
+let chatTranscript = [];
+
+function appendBubble(role, content) {
+  chatTranscript.push({ role, content });
+  return appendBubbleTo($("chat"), role, content); // 送信失敗時にこの吹き出しを取り消せるようにするため、要素を返す
 }
 
 function renderTranscript(transcript) {
+  chatTranscript = [...transcript];
   $("chat").innerHTML = "";
-  for (const m of transcript) appendBubble(m.role, m.content);
+  for (const m of transcript) appendBubbleTo($("chat"), m.role, m.content);
+}
+
+// 支払い画面・レシート画面に、これまでの会話を読み取り専用のログとして表示する。
+function renderPastChat(containerId, labelId, transcript) {
+  if (!transcript || transcript.length === 0) {
+    $(containerId).classList.add("hidden");
+    $(labelId).classList.add("hidden");
+    return;
+  }
+  $(containerId).innerHTML = "";
+  for (const m of transcript) appendBubbleTo($(containerId), m.role, m.content);
+  $(containerId).classList.remove("hidden");
+  $(labelId).classList.remove("hidden");
 }
 
 function setNegotiationUiState(price, turn, maxTurn, bonus) {
@@ -184,6 +212,9 @@ function enterPaymentPhase(price) {
   $("chatSection").classList.add("hidden");
   $("manualWaitSection").classList.add("hidden");
   $("finalPriceLabel").textContent = finalPrice;
+  // チャット欄自体は隠れるが、会話の記録は読み返せるように支払い画面側に残す
+  // (「会話が終わったらすぐ消えてしまう、読み返せて面白いのに」との指摘を受けて追加)。
+  renderPastChat("payChat", "payChatLabel", chatTranscript);
   $("paySection").classList.remove("hidden");
 }
 
@@ -370,13 +401,17 @@ function renderReceipt(receipt) {
   $("receiptPriceLabel").textContent = receipt.price;
   $("receiptTimeLabel").textContent = "支払い時刻: " + new Date(receipt.paidAt).toLocaleString("ja-JP");
   $("receiptTxHashLabel").textContent = "txHash: " + receipt.txHash;
+  // 支払い画面と同じ理由(読み返せて面白い)で、レシート画面にも会話の記録を残す。
+  renderPastChat("receiptChat", "receiptChatLabel", receipt.transcript);
   updateReceiptStatusUI(receipt);
   $("receiptSection").classList.remove("hidden");
 }
 
 function enterReceiptPhase({ wallet, displayName, price, txHash, sessionId }) {
   stopManualPoll();
-  const receipt = { wallet, displayName, price, txHash, sessionId, paidAt: Date.now(), unlockStatus: "pending" };
+  // chatTranscriptをコピーして保存する(参照のままだと、この後の他の操作で内容が
+  // 書き換わってしまう可能性があるため)。manualモード(AI無し)は常に空配列。
+  const receipt = { wallet, displayName, price, txHash, sessionId, paidAt: Date.now(), unlockStatus: "pending", transcript: [...chatTranscript] };
   writeJSON(RECEIPT_STORAGE_KEY, receipt);
   localStorage.removeItem(SESSION_STORAGE_KEY); // セッションは消費済み。再開の必要は無い
   renderReceipt(receipt);
@@ -463,6 +498,7 @@ async function tryRestoreReceiptFromServer(wallet) {
     sessionId: null,
     paidAt: data.paidAt,
     unlockStatus: data.unlockStatus,
+    transcript: data.transcript || [],
   };
   writeJSON(RECEIPT_STORAGE_KEY, receipt);
   renderReceipt(receipt);
@@ -555,6 +591,7 @@ async function sendChatMessage(message) {
       // サーバー側には記録されていないので、表示だけ先行していた発言を引っ込めて
       // 入力欄に戻す(見た目だけ送信済みで実際は送られていない、という不整合を防ぐ)。
       userBubble.remove();
+      chatTranscript.pop(); // appendBubbleで積んだ分をDOMと一緒に取り消す
       $("chatInput").value = message;
       showStatus(data.error || "送信に失敗しました", "err");
       $("sendBtn").disabled = false;
@@ -574,6 +611,7 @@ async function sendChatMessage(message) {
     $("finalizeBtn").disabled = false;
   } catch (err) {
     userBubble.remove();
+    chatTranscript.pop(); // appendBubbleで積んだ分をDOMと一緒に取り消す
     $("chatInput").value = message;
     showStatus("送信に失敗しました: " + (err.message || err), "err");
     $("sendBtn").disabled = false;
