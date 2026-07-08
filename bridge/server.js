@@ -747,6 +747,26 @@ app.post('/negotiate-finalize', (req, res) => {
   return res.json({ ok: true, price: session.currentPrice, status: session.status });
 });
 
+// 参加者本人用: 確定価格での購入をやめる(negotiate/index.htmlの「やめる」ボタン)。
+// 管理者用の/negotiate-admin-cancelと違い、これは本人が自分のセッションをやめる
+// だけなのでX-Secret認証は不要(他の/negotiate-*系と同じ信頼境界)。これが無いと、
+// 参加者が購入を見送った場合でもクオートの有効期限(NEGOTIATE_QUOTE_TTL_MS)が
+// 切れるまで実機が専有されたままになり、次の人がすぐ使えなくなってしまう。
+app.post('/negotiate-cancel', (req, res) => {
+  sweepStaleNegotiationSessions();
+  const { sessionId } = req.body ?? {};
+  const session = typeof sessionId === 'string' ? negotiationSessions.get(sessionId) : null;
+  if (session && (session.status === 'negotiating' || session.status === 'awaiting-payment')) {
+    session.status = 'expired';
+    if (currentSessionId === sessionId) {
+      currentSessionId = null; // 実機を次の参加者のためにすぐ解放する
+    }
+  }
+  // セッションが既に存在しない(タイムアウト等で消えた)場合も、参加者側は
+  // どのみち離脱したい状態なのでエラーにはせず成功扱いにする。
+  return res.json({ ok: true });
+});
+
 // 投影用ページ(spectator/index.html)・manualモード待機中のnegotiate/index.htmlが
 // ポーリングする。認証不要(現在進行中の交渉のチャット内容と表示名以外、何も含まれないため)。
 app.get('/negotiate-current', (req, res) => {

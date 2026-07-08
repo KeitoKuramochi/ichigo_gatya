@@ -70,7 +70,11 @@
     <p class="muted" id="payChatLabel">ここまでの会話:</p>
     <div class="chat" id="payChat"></div>
     <p class="priceLine" style="margin-top:16px">確定価格: <span id="finalPriceLabel"></span> ICHIGO</p>
-    <button id="payBtn">② 支払ってガチャを回す</button>
+    <p class="muted">この価格で購入しますか?</p>
+    <div class="resolutionButtons">
+      <button id="payBtn">② 支払ってガチャを回す</button>
+      <button id="cancelPurchaseBtn" class="secondaryBtn">やめる</button>
+    </div>
   </div>
 
   <div id="receiptSection" class="hidden receipt">
@@ -723,6 +727,9 @@ $("finalizeBtn").addEventListener("click", async () => {
 });
 
 $("payBtn").addEventListener("click", async () => {
+  // 「やめる」ボタンと並んでいるため押し間違いが起きうる。実際に送金する前に
+  // 一度確認を挟む(参加者からの要望を受けて追加)。
+  if (!confirm(`${finalPrice} ICHIGOを支払って、ガチャを回しますか?`)) return;
   const btn = $("payBtn");
   try {
     btn.disabled = true;
@@ -762,6 +769,25 @@ $("payBtn").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
   }
+});
+
+// 確定価格での購入をやめる。押し間違い防止のため確認を挟む。サーバー側に
+// セッションの終了を伝え、実機を次の参加者のためにすぐ解放する
+// (これが無いと、アイドルタイムアウトが来るまで実機が専有されたままになる)。
+$("cancelPurchaseBtn").addEventListener("click", async () => {
+  if (!confirm("購入をやめますか?")) return;
+  try {
+    await fetch("/negotiate-cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    });
+  } catch {
+    // 通信エラーでも参加者はやめる意思なので、ローカルの状態はリセットして進める
+    // (サーバー側は最終的にクオート有効期限切れで自動的に片付く)。
+  }
+  localStorage.removeItem(SESSION_STORAGE_KEY);
+  location.reload();
 });
 
 // ページ読み込み時、有効期限内の証拠画面が残っていればそれを最優先で表示する
