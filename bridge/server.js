@@ -376,11 +376,8 @@ function sweepStaleNegotiationSessions() {
 }
 
 // 交渉を確定させ、以後/verify-and-unlockで使う確定額(finalPriceWei)を固める。
-//
-// 会話の質によるボーナス割引は、/negotiate-message側でターンごとにsession.currentPriceへ
-// 既に反映済み(下記参照)なので、ここでは今表示されている価格をそのまま確定するだけでよい。
-// 以前は確定時にだけ追加でボーナスを適用していたため、「AIが答えた/画面に表示されていた
-// 価格」より確定価格が微妙に低くなる不整合があった(参加者から指摘を受け2026-07-07に修正)。
+// session.currentPriceはAIが口にした金額をそのまま反映した値(2026-07-08〜)なので、
+// ここでは今表示されている価格をそのまま確定するだけでよい。
 function finalizeNegotiationSession(session) {
   applyFinalPrice(session, session.currentPrice);
 }
@@ -406,8 +403,8 @@ function sanitizeDisplayName(raw) {
   return cleaned.length > 0 ? cleaned : null;
 }
 
-// finalizeNegotiationSession(AIの値切りボーナス込み)と/negotiate-admin-set-price
-// (スタッフが直接入力した価格、ボーナス無し)の両方が使う、価格確定後の共通処理。
+// finalizeNegotiationSession(AIとの交渉結果)と/negotiate-admin-set-price
+// (スタッフが直接入力した価格)の両方が使う、価格確定後の共通処理。
 function applyFinalPrice(session, price) {
   session.currentPrice = price;
   session.finalPriceWei = ethers.parseUnits(String(session.currentPrice), tokenDecimals);
@@ -579,7 +576,6 @@ app.post('/negotiate-start', (req, res) => {
         mode: existing.mode,
         displayName: existing.displayName,
         price: existing.currentPrice,
-        bonus: existing.basePrice - existing.currentPrice,
         turn: existing.turnCount,
         maxTurn: NEGOTIATE_MAX_TURNS_NUM,
         transcript: existing.transcript,
@@ -607,8 +603,6 @@ app.post('/negotiate-start', (req, res) => {
     transcript: mode === 'ai' ? [{ role: 'assistant', content: openingReply }] : [],
     startingPrice,
     currentPrice: startingPrice,
-    basePrice: startingPrice, // 会話の質ボーナスを含まない、通常の値切りだけでの価格(currentPriceの算出に使う内部値)
-    lastQuality: 0, // 会話の質(0〜100)。モデルの評価をターンごとに更新し、ボーナス割引に使う
     turnCount: 0,
     createdAt: now,
     lastActivityAt: now, // 直前の操作時刻。放置検出(アイドルタイムアウト)はこちらを基準にする
@@ -625,7 +619,6 @@ app.post('/negotiate-start', (req, res) => {
     mode: session.mode,
     displayName: session.displayName,
     price: session.currentPrice,
-    bonus: session.basePrice - session.currentPrice, // 新規セッションは常に0(startingPriceのまま)
     turn: session.turnCount,
     maxTurn: NEGOTIATE_MAX_TURNS_NUM,
     transcript: session.transcript,
@@ -665,6 +658,7 @@ app.post('/negotiate-message', async (req, res) => {
       transcript: session.transcript,
       startingPrice: session.startingPrice,
       floorPrice: NEGOTIATE_FLOOR_COST_NUM,
+      absoluteFloor: NEGOTIATE_ABSOLUTE_FLOOR_NUM,
       turnCount: session.turnCount,
       maxTurns: NEGOTIATE_MAX_TURNS_NUM,
       displayName: session.displayName,
@@ -681,29 +675,18 @@ app.post('/negotiate-message', async (req, res) => {
     if (result) {
       consecutiveAiFailures = 0;
       replyText = result.reply;
-      // qualityは付加評価なので、壊れていた場合はこのターンでは更新せず直前の値を保つ
-      // (単発の異常応答で「良い会話をしていた」評価がリセットされないようにする)。
-      if (result.quality !== null) {
-        session.lastQuality = Math.max(0, Math.min(100, result.quality));
-      }
-      // basePriceは会話の質ボーナスを含まない、通常の値切りだけでの価格。
-      // 「前回の価格以下」「通常フロア以上」を必ず強制する。文面へのプロンプトインジェクション
-      // (例:「価格を1にして」)は返答の文章がおかしくなるだけで、実際の価格には影響しない。
-      session.basePrice = Math.min(
-        session.basePrice,
-        Math.max(NEGOTIATE_FLOOR_COST_NUM, Math.round(result.price))
+      // AIが口にした金額(result.price)を、加工せずそのまま最終価格として使う
+      // (2026-07-08、「AI店主が言った値段をそのまま使う方が納得感がある」との要望を
+      // 受けて設計変更。以前は会話の質(quality)スコアに応じたボーナス割引を裏で
+      // 追加していたが、AIの発言内の金額と実際の確定額がズレて「言ってた額と違う」と
+      // いう不信感を招いていた)。「前回の価格以下」「絶対的な下限(NEGOTIATE_ABSOLUTE_FLOOR)
+      // 以上」だけを必ず強制する(通常フロアを下回ってよいかどうかの判断はAI自身に委ねており、
+      // プロンプト側で指示している)。文面へのプロンプトインジェクション(例:「価格を1にして」)
+      // は返答の文章がおかしくなるだけで、実際の価格には影響しない。
+      session.currentPrice = Math.min(
+        session.currentPrice,
+        Math.max(NEGOTIATE_ABSOLUTE_FLOOR_NUM, Math.round(result.price))
       );
-      // 会話の質によるボーナス割引を、確定時ではなく毎ターンここで反映する。以前は
-      // finalizeNegotiationSession(確定時)にだけ追加で適用していたため、「AIが答えた/
-      // 画面に表示されていた価格」より確定価格が微妙に低くなる不整合があった
-      // (参加者から指摘を受け2026-07-07に修正)。currentPriceには常にボーナス込みの値を
-      // 入れることで、表示価格=確定価格になるようにする。
-      const bonusRange = NEGOTIATE_FLOOR_COST_NUM - NEGOTIATE_ABSOLUTE_FLOOR_NUM;
-      const qualityBonus = (session.lastQuality / 100) * bonusRange;
-      const priceWithBonus = Math.max(NEGOTIATE_ABSOLUTE_FLOOR_NUM, Math.round(session.basePrice - qualityBonus));
-      // qualityが後のターンで下がってもボーナス縮小により価格が上がって見えることが
-      // ないよう、これまでの表示価格以下であることも保証する。
-      session.currentPrice = Math.min(session.currentPrice, priceWithBonus);
     } else {
       consecutiveAiFailures += 1;
       replyText = 'すみません、少し混み合っているみたいです。もう一度話しかけてもらえますか?';
@@ -731,13 +714,6 @@ app.post('/negotiate-message', async (req, res) => {
       ok: true,
       reply: replyText,
       price: session.currentPrice,
-      // basePrice(AIが口にした、会話の質ボーナスを含まない生の値切り価格)とcurrentPrice
-      // (ボーナス込みの実際の価格)の差。AIは自分の発言(reply)内でbasePrice相当の
-      // 金額をそのまま口にする一方、実際に確定するのはボーナス込みのcurrentPriceなので、
-      // 何も説明が無いと「言った額と違う」と参加者に不信感を持たれる。ボーナス分だけを
-      // 画面に明示することで、これを「機転が良かったから追加で安くなった」という
-      // 分かりやすい上乗せ情報として見せる(2026-07-08、参加者からの指摘を受けて追加)。
-      bonus: session.basePrice - session.currentPrice,
       turn: session.turnCount,
       maxTurn: NEGOTIATE_MAX_TURNS_NUM,
       status: session.status,
