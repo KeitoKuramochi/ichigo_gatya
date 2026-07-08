@@ -67,10 +67,10 @@
   </div>
 
   <div id="paySection" class="hidden">
-    <p class="priceLine">確定価格: <span id="finalPriceLabel"></span> ICHIGO</p>
-    <button id="payBtn">② 支払ってガチャを回す</button>
-    <p class="muted" id="payChatLabel" style="margin-top:16px">ここまでの会話:</p>
+    <p class="muted" id="payChatLabel">ここまでの会話:</p>
     <div class="chat" id="payChat"></div>
+    <p class="priceLine" style="margin-top:16px">確定価格: <span id="finalPriceLabel"></span> ICHIGO</p>
+    <button id="payBtn">② 支払ってガチャを回す</button>
   </div>
 
   <div id="receiptSection" class="hidden receipt">
@@ -204,6 +204,10 @@ function enterPaymentPhase(price) {
   // (「会話が終わったらすぐ消えてしまう、読み返せて面白いのに」との指摘を受けて追加)。
   renderPastChat("payChat", "payChatLabel", chatTranscript);
   $("paySection").classList.remove("hidden");
+  // sendChatMessage側で出した「支払い画面に切り替わります…」のステータス表示が、
+  // 実際に切り替わった後もずっと残ってしまっていた(「ずっと出ちゃう」との指摘)ため、
+  // ここで消す。
+  showStatus("", "");
 }
 
 // manualモード(AI無し、店員と対面で交渉)のセッションは、参加者側は入力する
