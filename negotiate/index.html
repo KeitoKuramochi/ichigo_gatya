@@ -115,6 +115,11 @@ const RECEIPT_STORAGE_KEY = "ichigo_receipt";
 const RECEIPT_TTL_MS = 30 * 60 * 1000; // 決済証拠画面。古い受け取りを別の人に見せてしまわないための期限
 const SESSION_STORAGE_KEY = "ichigo_negotiate_session";
 const SESSION_POINTER_TTL_MS = 20 * 60 * 1000; // リロード時に名前入力を再度求めないための「しおり」
+// 「もう一度購入する」で明示的に退けたレシートのtxHashを覚えておくためのキー。
+// これが無いと、サーバー側の復元機能(/negotiate-receipt、localStorageが消えた場合の
+// 保険)が同じ直近の購入(30分以内)を見つけて古いレシートを復元し直してしまい、
+// 「やり直したいのに同じ画面に戻る」というループになる。
+const DISMISSED_RECEIPT_KEY = "ichigo_dismissed_receipt";
 
 const $ = (id) => document.getElementById(id);
 
@@ -378,6 +383,12 @@ $("resolveNoBtn").addEventListener("click", () => {
 // 削除していた。しかし本人が続けて2回目を買いたい場合にレシート画面から
 // 抜け出す手段が無くなってしまっていた(参加者からの指摘)ため、文言を変えて復活させた。
 $("buyAgainBtn").addEventListener("click", () => {
+  // このレシートは明示的に退けたと記録しておく。ウォレット再接続時のサーバー復元
+  // (tryRestoreReceiptFromServer)が、直近の購入としてこれを見つけて復元し直し、
+  // 「やり直したいのに同じ画面に戻る」というループになるのを防ぐため。
+  if (currentReceipt?.txHash) {
+    writeJSON(DISMISSED_RECEIPT_KEY, currentReceipt.txHash);
+  }
   localStorage.removeItem(RECEIPT_STORAGE_KEY);
   localStorage.removeItem(SESSION_STORAGE_KEY);
   location.reload();
@@ -485,6 +496,10 @@ async function tryRestoreReceiptFromServer(wallet) {
     return false;
   }
   if (!data.ok || !data.found) return false;
+
+  // 「もう一度購入する」で明示的に退けたレシートなら復元しない(でないと、押した
+  // 直後にウォレットを再接続するたびに同じ古いレシートへ引き戻されてしまう)。
+  if (readJSON(DISMISSED_RECEIPT_KEY) === data.txHash) return false;
 
   const receipt = {
     wallet,
