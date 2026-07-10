@@ -1066,6 +1066,7 @@ app.get('/poll-unlock', (req, res) => {
   sweepStaleUnlockRequests();
   sweepStaleTestMoveRequests();
   sweepStaleAdminLockRequests();
+  sweepStaleNegotiationSessions();
 
   let unlockPayload = { unlock: false };
   for (const [txHash, request] of unlockRequests) {
@@ -1104,7 +1105,19 @@ app.get('/poll-unlock', (req, res) => {
     };
   }
 
-  return res.json({ ...unlockPayload, ...testMovePayload, ...adminLockPayload });
+  // 交渉中(まだ支払い前)であることをESP32のOLEDに常時流させるためのフラグ。
+  // 実機1台=同時1交渉の前提なのでcurrentSessionIdだけを見ればよい(spectator/index.htmlの
+  // /negotiate-currentと同じ考え方)。displayNameは客が登録していれば呼び名込みで、
+  // 無ければ名前無しの文言をESP32側で出し分ける。
+  let negotiatingPayload = { negotiating: false };
+  if (currentSessionId) {
+    const negotiatingSession = negotiationSessions.get(currentSessionId);
+    if (negotiatingSession && negotiatingSession.status === 'negotiating') {
+      negotiatingPayload = { negotiating: true, negotiatingName: negotiatingSession.displayName || '' };
+    }
+  }
+
+  return res.json({ ...unlockPayload, ...testMovePayload, ...adminLockPayload, ...negotiatingPayload });
 });
 
 // ESP32がサーボを実際に動かした後、その結果(成功/失敗)を報告してくるエンドポイント。
