@@ -120,6 +120,7 @@
     <p class="receiptRow">お支払い: <strong id="receiptPriceLabel"></strong> ICHIGO</p>
     <p class="receiptRow muted" id="receiptTimeLabel"></p>
     <p class="receiptRow" id="receiptUnlockStatus"></p>
+    <p class="receiptRow muted hidden" id="unlockCountdown"></p>
     <p class="receiptRow muted" id="receiptTxHashLabel"></p>
     <p class="muted hidden" id="receiptChatLabel" style="margin-top:16px">ここまでの会話:</p>
     <div class="chat hidden" id="receiptChat"></div>
@@ -378,17 +379,56 @@ async function refreshBalance() {
   return bal;
 }
 
+// 解除確認のポーリングが最大で何秒かかるか(参加者に「あと何秒で諦めるか」を
+// 見せるため)。UNLOCK_POLL_MAX_TRIES/UNLOCK_POLL_MSと必ず連動させる。
+const UNLOCK_TOTAL_SECONDS = Math.round((UNLOCK_POLL_MAX_TRIES * UNLOCK_POLL_MS) / 1000);
+let unlockCountdownHandle = null;
+
+// 「ガチャガチャを解除しています…」のまま何も進捗が見えないと、参加者は
+// 何が起きているのか分からず不安になる(指摘を受けて追加)。実際のタイムアウト
+// 秒数(UNLOCK_TOTAL_SECONDS)ちょうどに合わせた見た目のカウントダウンを出す。
+function startUnlockCountdown() {
+  stopUnlockCountdown();
+  const el = $("unlockCountdown");
+  let remaining = UNLOCK_TOTAL_SECONDS;
+  const render = () => {
+    el.textContent = remaining > 0
+      ? `(このまま反応が無い場合、あと約${remaining}秒でタイムアウトと表示します)`
+      : "";
+    el.classList.toggle("hidden", remaining <= 0);
+  };
+  render();
+  unlockCountdownHandle = setInterval(() => {
+    remaining = Math.max(0, remaining - 1);
+    render();
+  }, 1000);
+}
+function stopUnlockCountdown() {
+  if (unlockCountdownHandle) {
+    clearInterval(unlockCountdownHandle);
+    unlockCountdownHandle = null;
+  }
+  const el = $("unlockCountdown");
+  el.textContent = "";
+  el.classList.add("hidden");
+}
+
 async function waitForUnlock(txHash) {
+  startUnlockCountdown();
   for (let i = 0; i < UNLOCK_POLL_MAX_TRIES; i++) {
     await new Promise((resolve) => setTimeout(resolve, UNLOCK_POLL_MS));
     try {
       const res = await fetch(`/unlock-status?txHash=${txHash}`);
       const data = await res.json();
-      if (data.status === "unlocked" || data.status === "failed") return data.status;
+      if (data.status === "unlocked" || data.status === "failed") {
+        stopUnlockCountdown();
+        return data.status;
+      }
     } catch {
       // ネットワークの瞬断はリトライで吸収する
     }
   }
+  stopUnlockCountdown();
   return "timeout";
 }
 
