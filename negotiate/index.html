@@ -24,18 +24,20 @@
     background-position: top center;
     background-repeat: no-repeat;
   }
-  h1 { font-size: 1.4rem; text-align: center; margin: 0 0 12px; position: relative; z-index: 1; }
-  /* バナー画像の下端をフェードさせ、同じ絵柄のページ背景に溶け込ませる。
-     さらに看板をバナーに少し重ねて配置し、バナーから吊るされているように見せる。 */
+  /* バナー画像の中に看板(ロゴ)を絶対配置で重ね、提灯が吊られているあたりの
+     梁から看板がぶら下がっているように見せる。バナー下端はごく軽くだけ
+     フェードさせて、下に続くページ背景(同じ絵の薄いバージョン)へなじませる。 */
+  .bannerWrap { position: relative; }
   .headerBanner {
-    display: block; width: 100%; height: auto; margin-bottom: -60px;
-    -webkit-mask-image: linear-gradient(to bottom, #000 65%, transparent 100%);
-    mask-image: linear-gradient(to bottom, #000 65%, transparent 100%);
+    display: block; width: 100%; height: auto;
+    -webkit-mask-image: linear-gradient(to bottom, #000 88%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 88%, transparent 100%);
   }
-  .logoImg { display: block; max-width: 78%; height: auto; margin: 0 auto; position: relative; z-index: 1; }
-  .characterWrap { text-align: center; margin: 4px 0 12px; }
-  .characterImg { width: 150px; height: 150px; object-fit: contain; }
-  button .btnIcon { width: 1.1em; height: 1.1em; vertical-align: middle; margin-right: 6px; }
+  h1 { margin: 0; position: absolute; top: 13%; left: 50%; transform: translateX(-50%); width: 60%; z-index: 1; }
+  .logoImg { display: block; width: 100%; height: auto; filter: drop-shadow(0 6px 8px rgba(0,0,0,.4)); }
+  .characterWrap { text-align: center; margin: 12px 0 16px; }
+  .characterImg { width: 240px; height: 240px; object-fit: contain; transition: opacity .2s ease; }
+  button .btnIcon { width: 1.9em; height: 1.9em; vertical-align: middle; margin-right: 8px; }
   button { font-size: 1rem; padding: 10px 16px; border-radius: 10px; border: none; background: var(--pink); color: #fff; cursor: pointer; }
   button:disabled { background: #ccc; cursor: default; }
   .balance { font-size: 1.6rem; font-weight: 700; color: var(--pink); }
@@ -43,7 +45,12 @@
   .ok { color: #1e8449; }
   .err { color: #c0392b; white-space: pre-wrap; }
   .hidden { display: none; }
-  .chat { border: 1px solid #ddd; border-radius: 10px; padding: 10px; height: 300px; overflow-y: auto; margin: 12px 0; background: #fafafa; }
+  .chat {
+    border: 1px solid #ddd; border-radius: 10px; padding: 10px; height: 300px; overflow-y: auto; margin: 12px 0;
+    background:
+      linear-gradient(rgba(250,250,250,.88), rgba(250,250,250,.88)),
+      url(assets/ichigoban-thinking.png) center 16px/170px auto no-repeat;
+  }
   .bubble { max-width: 80%; margin: 6px 0; padding: 8px 12px; border-radius: 12px; font-size: .95rem; line-height: 1.4; white-space: pre-wrap; }
   .bubble.user { margin-left: auto; background: var(--pink); color: #fff; }
   .bubble.assistant { margin-right: auto; background: #eee; color: #222; }
@@ -61,8 +68,10 @@
 </style>
 </head>
 <body>
-  <img src="assets/header-banner.png" alt="" class="headerBanner">
-  <h1><img src="assets/logo.png" alt="ICHIGOガチャガチャ" class="logoImg"></h1>
+  <div class="bannerWrap">
+    <img src="assets/header-banner.png" alt="" class="headerBanner">
+    <h1><img src="assets/logo.png" alt="ICHIGOガチャガチャ" class="logoImg"></h1>
+  </div>
   <p class="muted">店番AIと少し話して、値段を決めてから支払います。</p>
   <div class="characterWrap"><img id="characterImg" src="assets/ichigoban-greet.png" alt="イチゴ番" class="characterImg"></div>
 
@@ -232,19 +241,50 @@ function setNegotiationUiState(price, turn, maxTurn) {
 }
 
 // 交渉の進行状況に合わせてイチゴ番の表情を切り替える(挨拶→思案顔→決め顔→お祝い顔)。
+// 画像を差し替える瞬間に一度フェードアウト→フェードインさせることで、
+// 表情が変わったこと自体に気づきやすくする(単純な差し替えだと変化に気づきにくいため)。
 const CHARACTER_IMAGES = {
   greet: "assets/ichigoban-greet.png",
   thinking: "assets/ichigoban-thinking.png",
   decided: "assets/ichigoban-decided.png",
   thanks: "assets/ichigoban-thanks.png",
 };
+const CHARACTER_FADE_MS = 180;
 function setCharacterImage(state) {
   const src = CHARACTER_IMAGES[state];
-  if (src) $("characterImg").src = src;
+  const el = $("characterImg");
+  if (!src || !el || el.dataset.state === state) return;
+  el.dataset.state = state;
+  el.style.opacity = "0";
+  setTimeout(() => {
+    el.src = src;
+    el.style.opacity = "1";
+  }, CHARACTER_FADE_MS);
+}
+
+// 交渉中(チャット中/店員との対面待ち)は、キャラが黙って静止したままだと
+// 「動いていない・固まっている」ように見えて分かりにくいという指摘を受けて、
+// 挨拶顔と思案顔を一定間隔で交互に表示し、考えている雰囲気を演出する。
+const CHARACTER_IDLE_MS = 2200;
+let characterIdleHandle = null;
+function startCharacterIdleAnim() {
+  stopCharacterIdleAnim();
+  let showThinking = false;
+  characterIdleHandle = setInterval(() => {
+    showThinking = !showThinking;
+    setCharacterImage(showThinking ? "thinking" : "greet");
+  }, CHARACTER_IDLE_MS);
+}
+function stopCharacterIdleAnim() {
+  if (characterIdleHandle) {
+    clearInterval(characterIdleHandle);
+    characterIdleHandle = null;
+  }
 }
 
 function enterPaymentPhase(price) {
   stopManualPoll();
+  stopCharacterIdleAnim();
   setCharacterImage("decided");
   finalPrice = price;
   $("nameSection").classList.add("hidden");
@@ -266,7 +306,7 @@ function enterPaymentPhase(price) {
 // /negotiate-current(公開・認証不要)を軽くポーリングして待つだけでよい。
 function enterManualWaitingView(price) {
   $("nameSection").classList.add("hidden");
-  setCharacterImage("thinking");
+  startCharacterIdleAnim();
   $("manualPriceLabel").textContent = price;
   $("manualWaitSection").classList.remove("hidden");
   stopManualPoll();
@@ -444,6 +484,7 @@ $("buyAgainBtn").addEventListener("click", () => {
 // 見せれば対応できるようにする、という設計。
 function renderReceipt(receipt) {
   hideAllSections();
+  stopCharacterIdleAnim();
   // レシート画面は決済の最終状態(仮に機材トラブルがあっても証拠として残す画面)
   // なので、ウォレット接続UI等は隠して混乱を避ける。
   $("connectBtn").classList.add("hidden");
@@ -626,7 +667,7 @@ async function startNegotiation(nameToSubmit) {
 
   renderTranscript(data.transcript);
   setNegotiationUiState(data.price, data.turn, data.maxTurn);
-  setCharacterImage("thinking");
+  startCharacterIdleAnim();
   $("nameSection").classList.add("hidden");
   $("chatSection").classList.remove("hidden");
 }
