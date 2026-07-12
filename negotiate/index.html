@@ -10,7 +10,16 @@
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   :root { --pink: #ff6f91; }
-  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; color: #222; overflow-wrap: break-word; background: #fdfaf3 url(assets/paper-texture-tile.jpg); background-size: 320px 320px; }
+  body {
+    font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; color: #222; overflow-wrap: break-word;
+    background:
+      linear-gradient(rgba(253,250,243,.87), rgba(253,250,243,.87)),
+      url(assets/header-banner.png);
+    background-size: cover;
+    background-position: top center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+  }
   h1 { font-size: 1.4rem; text-align: center; margin: 12px 0; }
   .headerBanner { display: block; width: 100%; height: auto; border-radius: 12px; margin-bottom: 8px; }
   .logoImg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
