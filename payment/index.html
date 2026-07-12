@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ICHIGO 決済</title>
+<link rel="icon" type="image/png" href="assets/favicon.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"
         integrity="sha512-f+t6//rz3Iy3hp1CiwtsigYtyWuGk7bf6xl2RTOPvmyMIfTQJ4iy6Lg1dah1bsLQ9SLideJGicgmOkBsBXP1aA=="
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -11,6 +12,8 @@
   :root { --pink: #ff6f91; }
   body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; color: #222; }
   h1 { font-size: 1.4rem; }
+  .headerBanner { display: block; width: 100%; height: auto; border-radius: 12px; margin-bottom: 8px; }
+  button .btnIcon { width: 1.1em; height: 1.1em; vertical-align: middle; margin-right: 6px; }
   button { font-size: 1rem; padding: 10px 16px; border-radius: 10px; border: none; background: var(--pink); color: #fff; cursor: pointer; }
   button:disabled { background: #ccc; cursor: default; }
   .balance { font-size: 1.6rem; font-weight: 700; color: var(--pink); }
@@ -20,15 +23,16 @@
 </style>
 </head>
 <body>
+  <img src="assets/header-banner-simple.png" alt="" class="headerBanner">
   <h1>ICHIGO ガチャガチャ</h1>
   <p class="muted">ウォレットを接続して支払うと、実機のガチャガチャのロックが解除されます。</p>
 
-  <button id="connectBtn">① ウォレットを接続</button>
+  <button id="connectBtn"><img class="btnIcon" src="assets/icon-wallet.png" alt="">① ウォレットを接続</button>
   <p class="muted">アカウントを間違えた場合は、MetaMask側でアカウントを切り替えてください(自動で反映されます)</p>
   <p class="muted" id="account"></p>
   <p class="balance" id="balanceLabel"></p>
 
-  <button id="payBtn" disabled>② 支払ってガチャを回す(<span id="costLabel"></span> ICHIGO)</button>
+  <button id="payBtn" disabled><img class="btnIcon" src="assets/icon-buy.png" alt="">② 支払ってガチャを回す(<span id="costLabel"></span> ICHIGO)</button>
   <p id="status"></p>
 
 <script type="module">

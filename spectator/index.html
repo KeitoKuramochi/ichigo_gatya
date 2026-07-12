@@ -6,11 +6,13 @@
 <title>ICHIGO ガチャガチャ AI店番 - 投影用</title>
 <style>
   :root { --pink: #ff6f91; }
-  body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #111; color: #eee; }
-  h1 { font-size: 2rem; margin: 0 0 4px; }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #111 url(assets/stage-bg.png) center/cover no-repeat fixed; color: #eee; }
+  h1 { font-size: 2rem; margin: 0 0 4px; display: flex; align-items: center; justify-content: center; gap: 12px; }
   .muted { color: #aaa; font-size: 1.1rem; }
-  .idle { text-align: center; margin-top: 20vh; }
+  .idle { text-align: center; margin-top: 12vh; }
   .idle h2 { font-size: 2.2rem; color: var(--pink); }
+  .characterImg { width: 220px; height: 220px; object-fit: contain; display: block; margin: 0 auto 12px; }
+  .characterSmall { width: 64px; height: 64px; object-fit: contain; }
   .priceLine { font-size: 2.2rem; font-weight: 700; color: var(--pink); margin: 8px 0; }
   .turnLine { font-size: 1.3rem; color: #aaa; }
   .chat { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
@@ -18,7 +20,8 @@
   .bubble.user { margin-left: auto; background: var(--pink); color: #fff; }
   .bubble.assistant { margin-right: auto; background: #2a2a2a; color: #eee; }
   .manualNotice { margin-top: 20px; font-size: 1.6rem; color: #aaa; text-align: center; }
-  .completed { text-align: center; margin-top: 20vh; }
+  .completed { position: relative; text-align: center; margin-top: 12vh; }
+  .completed .confettiBg { position: absolute; inset: -40px; background: url(assets/confetti-overlay.png) 0 0/300px 300px repeat; opacity: .5; z-index: -1; }
   .completed h2 { font-size: 2.4rem; color: var(--pink); margin-bottom: 12px; }
   .completed .priceLine { justify-content: center; }
   .hidden { display: none; }
@@ -26,18 +29,21 @@
 </head>
 <body>
   <div id="idleView" class="idle">
+    <img src="assets/ichigoban-greet.png" alt="" class="characterImg">
     <h2>ICHIGO ガチャガチャ AI店番</h2>
     <p class="muted">QRコードをスキャンして交渉を始めてください</p>
   </div>
 
   <div id="completedView" class="hidden completed">
+    <div class="confettiBg"></div>
+    <img src="assets/ichigoban-thanks.png" alt="" class="characterImg">
     <h2>ありがとうございました!</h2>
     <p class="priceLine"><span id="completedNameLabel"></span>さん、<span id="completedPriceLabel"></span> ICHIGO</p>
     <p class="muted">次の方、お待たせしました</p>
   </div>
 
   <div id="activeView" class="hidden">
-    <h1>交渉中(<span id="walletLabel"></span>)</h1>
+    <h1><img src="assets/ichigoban-thinking.png" alt="" class="characterSmall">交渉中(<span id="walletLabel"></span>)</h1>
     <p class="priceLine">現在の提示価格: <span id="priceLabel"></span> ICHIGO</p>
     <p class="turnLine" id="turnLine"><span id="turnLabel"></span></p>
     <div class="chat" id="chat"></div>

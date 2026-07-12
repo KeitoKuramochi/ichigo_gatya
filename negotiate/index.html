@@ -4,13 +4,19 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ICHIGO ガチャガチャ AI店番</title>
+<link rel="icon" type="image/png" href="assets/favicon.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"
         integrity="sha512-f+t6//rz3Iy3hp1CiwtsigYtyWuGk7bf6xl2RTOPvmyMIfTQJ4iy6Lg1dah1bsLQ9SLideJGicgmOkBsBXP1aA=="
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   :root { --pink: #ff6f91; }
-  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; color: #222; overflow-wrap: break-word; }
-  h1 { font-size: 1.4rem; }
+  body { font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; color: #222; overflow-wrap: break-word; background: #fdfaf3 url(assets/paper-texture-tile.jpg); background-size: 320px 320px; }
+  h1 { font-size: 1.4rem; text-align: center; margin: 12px 0; }
+  .headerBanner { display: block; width: 100%; height: auto; border-radius: 12px; margin-bottom: 8px; }
+  .logoImg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+  .characterWrap { text-align: center; margin: 4px 0 12px; }
+  .characterImg { width: 150px; height: 150px; object-fit: contain; }
+  button .btnIcon { width: 1.1em; height: 1.1em; vertical-align: middle; margin-right: 6px; }
   button { font-size: 1rem; padding: 10px 16px; border-radius: 10px; border: none; background: var(--pink); color: #fff; cursor: pointer; }
   button:disabled { background: #ccc; cursor: default; }
   .balance { font-size: 1.6rem; font-weight: 700; color: var(--pink); }
@@ -27,7 +33,8 @@
   .priceLine { font-size: 1.1rem; font-weight: 700; margin: 4px 0; }
   .nameRow { display: flex; gap: 8px; margin: 8px 0; }
   .nameRow input { flex: 1; font-size: 1rem; padding: 8px 10px; border-radius: 10px; border: 1px solid #ccc; }
-  .receipt { border: 2px solid var(--pink); border-radius: 12px; padding: 16px; margin: 12px 0; }
+  .receipt { position: relative; border: 2px solid var(--pink); border-radius: 12px; padding: 16px; margin: 12px 0; background: #fff; }
+  .receiptStamp { position: absolute; top: -16px; right: -10px; width: 64px; height: 64px; pointer-events: none; }
   .receipt h2 { margin: 0 0 8px; font-size: 1.2rem; }
   .receiptRow { margin: 4px 0; }
   .resolutionButtons { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
@@ -35,10 +42,12 @@
 </style>
 </head>
 <body>
-  <h1>ICHIGO ガチャガチャ AI店番</h1>
+  <img src="assets/header-banner.png" alt="" class="headerBanner">
+  <h1><img src="assets/logo.png" alt="ICHIGOガチャガチャ" class="logoImg"></h1>
   <p class="muted">店番AIと少し話して、値段を決めてから支払います。</p>
+  <div class="characterWrap"><img id="characterImg" src="assets/ichigoban-greet.png" alt="イチゴ番" class="characterImg"></div>
 
-  <button id="connectBtn">① ウォレットを接続</button>
+  <button id="connectBtn"><img class="btnIcon" src="assets/icon-wallet.png" alt="">① ウォレットを接続</button>
   <p class="muted" id="account"></p>
   <p class="balance" id="balanceLabel"></p>
 
@@ -55,9 +64,9 @@
     <div class="chat" id="chat"></div>
     <div class="chatInputRow">
       <input id="chatInput" type="text" maxlength="500" placeholder="店番に話しかける…">
-      <button id="sendBtn">送る</button>
+      <button id="sendBtn"><img class="btnIcon" src="assets/icon-send.png" alt="">送る</button>
     </div>
-    <button id="finalizeBtn">この価格で決める</button>
+    <button id="finalizeBtn"><img class="btnIcon" src="assets/icon-decide.png" alt="">この価格で決める</button>
     <p class="priceLine">現在の提示価格: <span id="priceLabel"></span> ICHIGO(<span id="turnLabel"></span>)</p>
   </div>
 
@@ -72,12 +81,13 @@
     <p class="priceLine" style="margin-top:16px">確定価格: <span id="finalPriceLabel"></span> ICHIGO</p>
     <p class="muted">この価格で購入しますか?</p>
     <div class="resolutionButtons">
-      <button id="payBtn">② 支払ってガチャを回す</button>
-      <button id="cancelPurchaseBtn" class="secondaryBtn">やめる</button>
+      <button id="payBtn"><img class="btnIcon" src="assets/icon-buy.png" alt="">② 支払ってガチャを回す</button>
+      <button id="cancelPurchaseBtn" class="secondaryBtn"><img class="btnIcon" src="assets/icon-cancel.png" alt="">やめる</button>
     </div>
   </div>
 
   <div id="receiptSection" class="hidden receipt">
+    <img src="assets/receipt-stamp.png" alt="" class="receiptStamp">
     <h2 id="receiptTitle"></h2>
     <p class="receiptRow">お支払い: <strong id="receiptPriceLabel"></strong> ICHIGO</p>
     <p class="receiptRow muted" id="receiptTimeLabel"></p>
@@ -88,12 +98,12 @@
     <div id="receiptResolutionSection" class="hidden">
       <p class="receiptRow" id="resolutionPrompt"></p>
       <div class="resolutionButtons">
-        <button id="resolveYesBtn">はい、受け取れました</button>
-        <button id="resolveNoBtn" class="secondaryBtn">まだです、スタッフを呼びます</button>
+        <button id="resolveYesBtn"><img class="btnIcon" src="assets/icon-yes.png" alt="">はい、受け取れました</button>
+        <button id="resolveNoBtn" class="secondaryBtn"><img class="btnIcon" src="assets/icon-no.png" alt="">まだです、スタッフを呼びます</button>
       </div>
     </div>
     <p class="receiptRow ok hidden" id="receiptThanks">ICHIGOガチャガチャのご利用、ありがとうございました!</p>
-    <button id="buyAgainBtn" class="secondaryBtn hidden">もう一度購入する</button>
+    <button id="buyAgainBtn" class="secondaryBtn hidden"><img class="btnIcon" src="assets/icon-buy.png" alt="">もう一度購入する</button>
   </div>
 
   <p id="status"></p>
@@ -202,8 +212,21 @@ function setNegotiationUiState(price, turn, maxTurn) {
   $("turnLabel").textContent = `${turn}/${maxTurn}ターン`;
 }
 
+// 交渉の進行状況に合わせてイチゴ番の表情を切り替える(挨拶→思案顔→決め顔→お祝い顔)。
+const CHARACTER_IMAGES = {
+  greet: "assets/ichigoban-greet.png",
+  thinking: "assets/ichigoban-thinking.png",
+  decided: "assets/ichigoban-decided.png",
+  thanks: "assets/ichigoban-thanks.png",
+};
+function setCharacterImage(state) {
+  const src = CHARACTER_IMAGES[state];
+  if (src) $("characterImg").src = src;
+}
+
 function enterPaymentPhase(price) {
   stopManualPoll();
+  setCharacterImage("decided");
   finalPrice = price;
   $("nameSection").classList.add("hidden");
   $("chatSection").classList.add("hidden");
@@ -224,6 +247,7 @@ function enterPaymentPhase(price) {
 // /negotiate-current(公開・認証不要)を軽くポーリングして待つだけでよい。
 function enterManualWaitingView(price) {
   $("nameSection").classList.add("hidden");
+  setCharacterImage("thinking");
   $("manualPriceLabel").textContent = price;
   $("manualWaitSection").classList.remove("hidden");
   stopManualPoll();
@@ -331,6 +355,7 @@ function updateReceiptStatusUI(receipt) {
 
   if (receipt.resolution === "resolved") {
     // 解決済みなら、エラー文言・txHash・選択ボタンは不要でお礼だけ見せる
+    setCharacterImage("thanks");
     el.textContent = "";
     $("receiptTxHashLabel").classList.add("hidden");
     $("receiptResolutionSection").classList.add("hidden");
@@ -351,6 +376,7 @@ function updateReceiptStatusUI(receipt) {
     $("receiptResolutionSection").classList.add("hidden");
     $("buyAgainBtn").classList.add("hidden");
   } else if (status === "unlocked") {
+    setCharacterImage("thanks");
     el.textContent = "解除できました!カプセルをお受け取りください";
     el.className = "receiptRow ok";
     $("receiptResolutionSection").classList.add("hidden");
@@ -581,6 +607,7 @@ async function startNegotiation(nameToSubmit) {
 
   renderTranscript(data.transcript);
   setNegotiationUiState(data.price, data.turn, data.maxTurn);
+  setCharacterImage("thinking");
   $("nameSection").classList.add("hidden");
   $("chatSection").classList.remove("hidden");
 }
@@ -719,6 +746,11 @@ $("chatInput").addEventListener("keydown", (e) => {
 });
 
 $("finalizeBtn").addEventListener("click", async () => {
+  // 押し間違い防止(押すと交渉には戻れず支払い画面に進んでしまうため、
+  // payBtnの確認と同様に一度確認を挟む)。
+  const currentPriceText = $("priceLabel").textContent;
+  if (!confirm(`${currentPriceText} ICHIGOで決めます。もう交渉には戻れませんが、よろしいですか?`)) return;
+
   $("sendBtn").disabled = true;
   $("finalizeBtn").disabled = true;
   try {
