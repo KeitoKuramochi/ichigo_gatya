@@ -10,19 +10,29 @@
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <style>
   :root { --pink: #ff6f91; }
+  /* htmlに背景を持たせておかないと、bodyの背景がキャンバス(ビューポート全体)に
+     伸びて表示されてしまい、480px幅のバナー画像だけ小さく浮いて見えてしまう
+     (CSS仕様上の「body背景のキャンバスへの伝播」)。これでbody自身の箱(480px幅)
+     の中だけに背景が収まるようになり、バナー画像と同じ横幅・同じ縮尺で表示される。 */
+  html { background: #fdfaf3; }
   body {
     font-family: system-ui, sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px; color: #222; overflow-wrap: break-word;
     background:
       linear-gradient(rgba(253,250,243,.87), rgba(253,250,243,.87)),
       url(assets/header-banner.png);
-    background-size: cover;
+    background-size: 100% auto;
     background-position: top center;
     background-repeat: no-repeat;
-    background-attachment: fixed;
   }
-  h1 { font-size: 1.4rem; text-align: center; margin: 12px 0; }
-  .headerBanner { display: block; width: 100%; height: auto; border-radius: 12px; margin-bottom: 8px; }
-  .logoImg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+  h1 { font-size: 1.4rem; text-align: center; margin: 0 0 12px; position: relative; z-index: 1; }
+  /* バナー画像の下端をフェードさせ、同じ絵柄のページ背景に溶け込ませる。
+     さらに看板をバナーに少し重ねて配置し、バナーから吊るされているように見せる。 */
+  .headerBanner {
+    display: block; width: 100%; height: auto; margin-bottom: -60px;
+    -webkit-mask-image: linear-gradient(to bottom, #000 65%, transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 65%, transparent 100%);
+  }
+  .logoImg { display: block; max-width: 78%; height: auto; margin: 0 auto; position: relative; z-index: 1; }
   .characterWrap { text-align: center; margin: 4px 0 12px; }
   .characterImg { width: 150px; height: 150px; object-fit: contain; }
   button .btnIcon { width: 1.1em; height: 1.1em; vertical-align: middle; margin-right: 6px; }
