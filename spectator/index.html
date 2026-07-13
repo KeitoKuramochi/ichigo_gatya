@@ -4,25 +4,30 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ICHIGO ガチャガチャ AI店番 - 投影用</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;800&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
-  :root { --pink: #ff6f91; }
-  body { font-family: system-ui, sans-serif; margin: 0; padding: 24px; background: #111 url(assets/stage-bg.png) center/cover no-repeat fixed; color: #eee; }
-  h1 { font-size: 2rem; margin: 0 0 4px; display: flex; align-items: center; justify-content: center; gap: 12px; }
+  /* negotiate/index.htmlと共通のトークン。この画面は暗い舞台なので、
+     朱色そのものよりも提灯の金色(ゴールド)を主アクセントとして使う。 */
+  :root { --gold: #e0b25c; --vermilion: #d1573f; }
+  body { font-family: 'Zen Maru Gothic', system-ui, sans-serif; margin: 0; padding: 24px; background: #111 url(assets/stage-bg.png) center/cover no-repeat fixed; color: #eee; }
+  h1 { font-family: 'Shippori Mincho', serif; font-size: 2rem; margin: 0 0 4px; display: flex; align-items: center; justify-content: center; gap: 12px; }
   .muted { color: #aaa; font-size: 1.1rem; }
   .idle { text-align: center; margin-top: 12vh; }
-  .idle h2 { font-size: 2.2rem; color: var(--pink); }
+  .idle h2 { font-family: 'Shippori Mincho', serif; font-size: 2.2rem; color: var(--gold); }
   .characterImg { width: 220px; height: 220px; object-fit: contain; display: block; margin: 0 auto 12px; }
   .characterSmall { width: 64px; height: 64px; object-fit: contain; }
-  .priceLine { font-size: 2.2rem; font-weight: 700; color: var(--pink); margin: 8px 0; }
+  .priceLine { font-family: 'Shippori Mincho', serif; font-size: 2.2rem; font-weight: 700; color: var(--gold); margin: 8px 0; }
   .turnLine { font-size: 1.3rem; color: #aaa; }
   .chat { margin-top: 20px; display: flex; flex-direction: column; gap: 10px; }
   .bubble { max-width: 70%; padding: 14px 18px; border-radius: 16px; font-size: 1.4rem; line-height: 1.5; white-space: pre-wrap; }
-  .bubble.user { margin-left: auto; background: var(--pink); color: #fff; }
+  .bubble.user { margin-left: auto; background: var(--vermilion); color: #fff8ee; }
   .bubble.assistant { margin-right: auto; background: #2a2a2a; color: #eee; }
   .manualNotice { margin-top: 20px; font-size: 1.6rem; color: #aaa; text-align: center; }
   .completed { position: relative; text-align: center; margin-top: 12vh; }
   .completed .confettiBg { position: absolute; inset: -40px; background: url(assets/confetti-overlay.png) 0 0/300px 300px repeat; opacity: .5; z-index: -1; }
-  .completed h2 { font-size: 2.4rem; color: var(--pink); margin-bottom: 12px; }
+  .completed h2 { font-family: 'Shippori Mincho', serif; font-size: 2.4rem; color: var(--gold); margin-bottom: 12px; }
   .completed .priceLine { justify-content: center; }
   .hidden { display: none; }
 </style>
