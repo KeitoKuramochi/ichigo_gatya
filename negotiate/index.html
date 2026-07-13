@@ -24,17 +24,10 @@
     background-position: top center;
     background-repeat: no-repeat;
   }
-  /* バナー画像の中に看板(ロゴ)を絶対配置で重ね、提灯が吊られているあたりの
-     梁から看板がぶら下がっているように見せる。バナー下端はごく軽くだけ
-     フェードさせて、下に続くページ背景(同じ絵の薄いバージョン)へなじませる。 */
-  .bannerWrap { position: relative; }
-  .headerBanner {
-    display: block; width: 100%; height: auto;
-    -webkit-mask-image: linear-gradient(to bottom, #000 88%, transparent 100%);
-    mask-image: linear-gradient(to bottom, #000 88%, transparent 100%);
-  }
-  h1 { margin: 0; position: absolute; top: 13%; left: 50%; transform: translateX(-50%); width: 60%; z-index: 1; }
-  .logoImg { display: block; width: 100%; height: auto; filter: drop-shadow(0 6px 8px rgba(0,0,0,.4)); }
+  /* 街並みの絵はページ全体の背景(body)だけに任せ、看板(ロゴ)だけを
+     ページの一番上に単独で置く(クリックな縮小フレーム画像は使わない)。 */
+  h1 { margin: 12px 0 8px; text-align: center; }
+  .logoImg { display: block; width: 70%; max-width: 320px; height: auto; margin: 0 auto; filter: drop-shadow(0 6px 8px rgba(0,0,0,.4)); }
   .characterWrap { text-align: center; margin: 12px 0 16px; }
   .characterImg { width: 240px; height: 240px; object-fit: contain; transition: opacity .2s ease; }
   button .btnIcon { width: 1.9em; height: 1.9em; vertical-align: middle; margin-right: 8px; }
@@ -48,8 +41,8 @@
   .chat {
     border: 1px solid #ddd; border-radius: 10px; padding: 10px; height: 300px; overflow-y: auto; margin: 12px 0;
     background:
-      linear-gradient(rgba(250,250,250,.88), rgba(250,250,250,.88)),
-      url(assets/ichigoban-thinking.png) center 16px/170px auto no-repeat;
+      linear-gradient(rgba(250,250,250,.78), rgba(250,250,250,.78)),
+      url(assets/ichigoban-thinking.png) center/contain no-repeat;
   }
   .bubble { max-width: 80%; margin: 6px 0; padding: 8px 12px; border-radius: 12px; font-size: .95rem; line-height: 1.4; white-space: pre-wrap; }
   .bubble.user { margin-left: auto; background: var(--pink); color: #fff; }
@@ -68,10 +61,7 @@
 </style>
 </head>
 <body>
-  <div class="bannerWrap">
-    <img src="assets/header-banner.png" alt="" class="headerBanner">
-    <h1><img src="assets/logo.png" alt="ICHIGOガチャガチャ" class="logoImg"></h1>
-  </div>
+  <h1><img src="assets/logo.png" alt="ICHIGOガチャガチャ" class="logoImg"></h1>
   <p class="muted">店番AIと少し話して、値段を決めてから支払います。</p>
   <div class="characterWrap"><img id="characterImg" src="assets/ichigoban-greet.png" alt="イチゴ番" class="characterImg"></div>
 
