@@ -16,7 +16,14 @@
   .muted { color: #aaa; font-size: 1.1rem; }
   .idle { text-align: center; margin-top: 12vh; }
   .idle h2 { font-family: 'Shippori Mincho', serif; font-size: 2.2rem; color: var(--gold); }
-  .characterImg { width: 220px; height: 220px; object-fit: contain; display: block; margin: 0 auto 12px; }
+  .characterImg {
+    width: 220px; height: 220px; object-fit: contain; display: block; margin: 0 auto 12px;
+    transform-origin: bottom center; animation: gentleSway 4.5s ease-in-out infinite;
+  }
+  @keyframes gentleSway {
+    0%, 100% { transform: rotate(-1.8deg); }
+    50% { transform: rotate(1.8deg); }
+  }
   .characterSmall { width: 64px; height: 64px; object-fit: contain; }
   .priceLine { font-family: 'Shippori Mincho', serif; font-size: 2.2rem; font-weight: 700; color: var(--gold); margin: 8px 0; }
   .turnLine { font-size: 1.3rem; color: #aaa; }

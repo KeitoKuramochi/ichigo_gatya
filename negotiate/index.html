@@ -59,7 +59,14 @@
     position: absolute; left: 50%; bottom: 0; transform: translateX(-50%);
     width: 46%; z-index: 2;
   }
-  .characterImg { width: 100%; height: auto; object-fit: contain; display: block; transition: opacity .2s ease; }
+  .characterImg {
+    width: 100%; height: auto; object-fit: contain; display: block; transition: opacity .2s ease;
+    transform-origin: bottom center; animation: gentleSway 4.5s ease-in-out infinite;
+  }
+  @keyframes gentleSway {
+    0%, 100% { transform: rotate(-1.8deg); }
+    50% { transform: rotate(1.8deg); }
+  }
 
   /* ==== カウンター(この画面の署名要素) ====
      舞台(イラスト)と紙(フォーム)の境目に、屋台の木のカウンターを1本通す。
@@ -83,7 +90,13 @@
   }
   button:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--vermilion-deep), 0 2px 4px rgba(0,0,0,.18); }
   button:disabled { background: #cec2ab; color: #8c7f68; box-shadow: none; cursor: default; }
-  button .btnIcon { width: 2.6em; height: 2.6em; vertical-align: middle; margin-right: 10px; }
+  /* アイコンの色(朱赤+からし色)がボタン自体の朱色と被って同化し、見えにくく
+     なっていたため、クリーム色の丸いバッジを下に敷いてコントラストで際立たせる
+     (ボタンそのものは大きくしない)。 */
+  button .btnIcon {
+    width: 1.5em; height: 1.5em; padding: 4px; margin-right: 8px; vertical-align: middle;
+    background: #fff8ee; border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,.3);
+  }
   .secondaryBtn { background: var(--ink-soft); box-shadow: 0 3px 0 #55483a, 0 4px 8px rgba(0,0,0,.18); }
   .secondaryBtn:active { box-shadow: 0 1px 0 #55483a, 0 2px 4px rgba(0,0,0,.18); }
 
