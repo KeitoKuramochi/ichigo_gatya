@@ -92,11 +92,16 @@
   button:disabled { background: #cec2ab; color: #8c7f68; box-shadow: none; cursor: default; }
   /* アイコンの色(朱赤+からし色)がボタン自体の朱色と被って同化し、見えにくく
      なっていたため、クリーム色の丸いバッジを下に敷いてコントラストで際立たせる
-     (ボタンそのものは大きくしない)。 */
-  button .btnIcon {
-    width: 1.5em; height: 1.5em; padding: 4px; margin-right: 8px; vertical-align: middle;
-    background: #fff8ee; border-radius: 50%; box-shadow: 0 1px 2px rgba(0,0,0,.3);
+     (ボタンそのものは大きくしない)。さらに、素材画像自体が正方形の中央に
+     小さく描かれている(余白が広い)ため、バッジ内で画像を拡大・切り抜いて
+     アイコンの絵柄そのものが大きく見えるようにする。 */
+  .iconBadge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 1.6em; height: 1.6em; margin-right: 8px; vertical-align: middle;
+    background: #fff8ee; border-radius: 50%; overflow: hidden;
+    box-shadow: 0 1px 2px rgba(0,0,0,.3);
   }
+  .iconBadge .btnIcon { width: 100%; height: 100%; object-fit: cover; transform: scale(1.7); }
   .secondaryBtn { background: var(--ink-soft); box-shadow: 0 3px 0 #55483a, 0 4px 8px rgba(0,0,0,.18); }
   .secondaryBtn:active { box-shadow: 0 1px 0 #55483a, 0 2px 4px rgba(0,0,0,.18); }
 
@@ -169,7 +174,7 @@
   <div class="page">
     <p class="lead">店番AIと少し話して、値段を決めてから支払います。</p>
 
-    <button id="connectBtn"><img class="btnIcon" src="assets/icon-wallet.png" alt="">ウォレットを接続</button>
+    <button id="connectBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-wallet.png" alt=""></span>ウォレットを接続</button>
     <p class="muted" id="account"></p>
     <p class="balance" id="balanceLabel"></p>
 
@@ -186,9 +191,9 @@
       <div class="chat" id="chat"></div>
       <div class="chatInputRow">
         <input id="chatInput" type="text" maxlength="500" placeholder="店番に話しかける…">
-        <button id="sendBtn"><img class="btnIcon" src="assets/icon-send.png" alt="">送る</button>
+        <button id="sendBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-send.png" alt=""></span>送る</button>
       </div>
-      <button id="finalizeBtn"><img class="btnIcon" src="assets/icon-decide.png" alt="">この価格で決める</button>
+      <button id="finalizeBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-decide.png" alt=""></span>この価格で決める</button>
       <p class="priceLine">現在の提示価格
         <span class="priceTag"><span id="priceLabel"></span> <span class="unit">ICHIGO</span></span>
         <span class="turnBadge">(<span id="turnLabel"></span>)</span>
@@ -210,8 +215,8 @@
       </p>
       <p class="muted">この価格で購入しますか?</p>
       <div class="resolutionButtons">
-        <button id="payBtn"><img class="btnIcon" src="assets/icon-buy.png" alt="">支払ってガチャを回す</button>
-        <button id="cancelPurchaseBtn" class="secondaryBtn"><img class="btnIcon" src="assets/icon-cancel.png" alt="">やめる</button>
+        <button id="payBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-buy.png" alt=""></span>支払ってガチャを回す</button>
+        <button id="cancelPurchaseBtn" class="secondaryBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-cancel.png" alt=""></span>やめる</button>
       </div>
     </div>
 
@@ -228,12 +233,12 @@
       <div id="receiptResolutionSection" class="hidden">
         <p class="receiptRow" id="resolutionPrompt"></p>
         <div class="resolutionButtons">
-          <button id="resolveYesBtn"><img class="btnIcon" src="assets/icon-yes.png" alt="">はい、受け取れました</button>
-          <button id="resolveNoBtn" class="secondaryBtn"><img class="btnIcon" src="assets/icon-no.png" alt="">まだです、スタッフを呼びます</button>
+          <button id="resolveYesBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-yes.png" alt=""></span>はい、受け取れました</button>
+          <button id="resolveNoBtn" class="secondaryBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-no.png" alt=""></span>まだです、スタッフを呼びます</button>
         </div>
       </div>
       <p class="receiptRow ok hidden" id="receiptThanks">ICHIGOガチャガチャのご利用、ありがとうございました!</p>
-      <button id="buyAgainBtn" class="secondaryBtn hidden"><img class="btnIcon" src="assets/icon-buy.png" alt="">もう一度購入する</button>
+      <button id="buyAgainBtn" class="secondaryBtn hidden"><span class="iconBadge"><img class="btnIcon" src="assets/icon-buy.png" alt=""></span>もう一度購入する</button>
     </div>
 
     <p id="status"></p>
