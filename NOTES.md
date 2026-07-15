@@ -416,3 +416,109 @@ AIが最終ターンで「これ以上の値下げはないから、この値段
 - `payment/index.html`: header-banner-simple・各ボタンアイコン・favicon
 - PIL(Pillow)で白背景を透過PNGに変換するスクリプトをその場で書いて使用(ボタン内で使うアイコン・ダーク背景のspectatorで使うキャラ画像・紙吹雪オーバーレイに適用)。
 - Playwright MCPが未接続だったため、Macに入っているGoogle Chromeのヘッドレススクリーンショット(`--headless --screenshot`)で実際の見た目を確認。この過程で2つの不具合を発見・修正: (1)キャラ・アイコン画像の白背景がページ背景から四角く浮いて見える(→透過PNG化で解決)、(2)spectator完了画面の紙吹雪オーバーレイが白背景のまま重ねたことで灰色の四角い箱に見える(→透過化+タイル状に敷き詰める`background-repeat`に変更して解決)。Fireflyは「参照画像」機能(構図/スタイルを似せる)でキャラの一貫性を出す運用、UIの「除外したい要素」欄をネガティブプロンプト相当として使う。
+
+## セキュリティレビュー(2026-07-13)と「同時アクセス」の挙動確認
+
+「システムの脆弱性を見つけたい(同時複数人アクセスなど)」との依頼で`bridge/server.js`・`negotiation.js`・`gachapon.ino`をひととおりレビューした。指摘した項目と結論:
+
+1. **`/test-move`が支払い検証なしにメインのロック解除サーボを直接動かせる**: `angle=45(=UNLOCK_ANGLE), holdMs=950, moveMs=500, servo=main`を送ると`unlockOnce()`と同じ動きを支払いなしで再現できる。認証は`ESP32_SECRET`のみ(決済フローとは無関係の合言葉を流用)。
+2. **ESP32側がTLS証明書検証を無効化している(`client.setInsecure()`)**: 会場WiFi上の経路上攻撃者が`ESP32_SECRET`を盗聴できれば(1)と組み合わせて無料排出が可能になる、という理論上の攻撃チェーン。
+3. **`payment/index.html`への直アクセス(例: `/index.html`)で「同時に1交渉まで」のロックを迂回できる**: `app.get('/')`のリダイレクトは完全一致パスのみを塞いでおり、`express.static(GAME_DIR)`はルート直下全体に効いたままなので`/index.html`は素通りする。送金額自体はごまかせない(定価が必要)が、AI交渉と`currentSessionId`の排他制御を丸ごとスキップできる。
+
+→ **ユーザー判断: 1〜3はいずれも直さない(学園祭デモであり、そこまで厳密でなくてよいとのこと)**。今後のセッションでこれらを蒸し返して再修正を提案しない。
+
+上記とは別に、「QRから複数人が同時にサイトへアクセスしてウォレット接続したらどうなるか」を実装を追ってトレースして回答した:
+- ウォレット接続(`eth_requestAccounts`)はブラウザ内で完結しサーバーに一切問い合わせないため、何人が同時に接続しても競合しない。
+- 競合が起きうるのは`POST /negotiate-start`(交渉開始ボタン)の時点のみ。`currentSessionId`という単一変数で管理しており、このハンドラは`await`を挟まず同期的に処理されるため、Node.jsのシングルスレッド性により本当に同時刻に複数リクエストが届いても1件ずつ完全に処理される。**2人が同時に交渉スロットを取ってしまう壊れ方はしない**。
+- 先着以外は`409`(`他の方が交渉中です`)を受け取り、`negotiate/index.html`はエラー文言を表示するだけで自動リトライや順番待ち表示は無い(手動で再度ボタンを押す必要がある)。データが壊れる・不正に安く買われるといった実害は無いが、UXとしては「先着1名以外は手動で何度も押し直す」形になる。今回はこのままでよいという結論。
+
+### スマホで「この名前で始める」ボタンの文字が縦に1文字ずつ折り返る不具合を修正(2026-07-13)
+
+実機(iPhone、Safari)のスクリーンショットで発見。原因は`.nameRow`(呼び名入力欄とボタンを横並びにする`display:flex`の行)で、ボタン側に`flex-shrink`の対策が無かったこと。日本語はスペース無しでもどの文字間でも改行できてしまうため、横幅が足りないとflexの縮小によってボタンの内容幅が1文字分まで潰れ、「この名前で始める」が9行の縦積みになり、`align-items`の既定(`stretch`)につられて隣の入力欄まで異常に背が高くなっていた。
+
+- `negotiate/index.html`: `.nameRow button, .chatInputRow button`に`flex-shrink: 0; white-space: nowrap;`を追加し、ボタンは常に1行のまま縮まないようにした(狭い分は`flex:1`の入力欄側だけが縮む)。同じ構造の`.chatInputRow`(チャット欄の「送る」ボタン)にも同時に対策した。
+- 動作確認: PlaywrightのCLI(`npx playwright screenshot`)でChromiumをiPhone相当の幅(390px)にビューポート指定して確認。修正前は(手元の環境では)2行折り返し止まりだったが、修正後は1行に収まり行の高さも正常に戻ることを確認した。実機ほど極端な折り返しは再現できなかったが、原因(flexの縮小+CJKの改行仕様)自体は特定できており、`flex-shrink:0`はこの種の崩れに対する一般的な対策として有効。
+
+### 全画面のレスポンシブ・ダークモード対応の総点検(2026-07-13)
+
+「どのデバイスでも綺麗に見えるように」との依頼で、`negotiate`/`payment`/`spectator`/`admin`/`test`の5画面を、モバイル(390px)・タブレット(820px)・デスクトップ(1440px)× ライト/ダークモードの組み合わせでPlaywright(`npx playwright screenshot --color-scheme light|dark`)でスクリーンショットし、さらに`negotiate/index.html`はチャット中・支払い・レシート(成功/失敗)の各状態もサンプルデータで再現して確認した。
+
+- ほとんどの画面・状態は既に問題なし: 全ページとも色をCSS変数で明示指定しているため、OSのダークモード設定を変えても見た目は変わらない(意図した一枚岩のデザインなので、これは崩れではなく想定通り)。デスクトップ幅では`max-width`で中央寄せされた1枚のカードになるが、これも段ボール製の実機に合わせた「小さな紙のチケット」的なデザイン意図と捉え、幅を無理に広げる変更はしなかった。
+- **見つけて直した実際の崩れ**: `admin/refill-lock.html`の「直近の購入履歴」テーブルで、呼び名未入力の購入者は42文字のウォレットアドレスがそのまま「名前」列に入る。このアドレスはスペースの無い1つの連続した文字列なので、モバイル幅では列の折り返しが効かずテーブルごと・ページごと横スクロールする不具合があり(実際に390px幅でテーブルが474pxまで押し広げられることを確認)、さらにその分「解除」列が潰れて「排出済み」が1文字ずつ縦に折り返る、前回のボタンと同種の崩れも誘発していた。`#purchasesTableWrap { overflow-x: auto; }`と`th, td { overflow-wrap: anywhere; }`を追加し、テーブル自体はスクロール可能に、セル内の長い文字列はスクロール無しで折り返せるようにして解決(修正後、390px幅でも横スクロールが発生しないことを確認済み)。
+- **予防的な修正**: `payment/index.html`の`body`に`overflow-wrap: break-word`が無く、`negotiate/index.html`側にはある同じ対策が抜けていた(ウォレットアドレス表示で将来的にはみ出す余地があったため、揃えて追加した。手元の実測では42文字のアドレスは390px・320px幅でもぎりぎり折り返さず収まっていたが、より狭い埋め込みブラウザ等への保険)。
+- 対象外(意図的に変えなかった点): `admin`/`test`ページはもともと配色トークンを使わない簡素な白背景の管理者・調整用ページで、これはVISUAL_DESIGN_PROMPTSでの意図的な除外([[project-ichigo-gachapon]]参照)。ダークモード用の別配色を新設する提案はしなかった(参加者の目に触れない画面のため)。
+
+## BGM・ボタンSE・購入音の追加(2026-07-15)
+
+お祭りらしさを音でも出したい、という要望を受けて`negotiate/index.html`・`spectator/index.html`に音を追加した。
+
+- **ボタンSE(negotiateのみ)**: 接続ボタン→カチッ、送信ボタン→ポン。外部音源を持たず、Web Audio APIのオシレーターでその場で合成している(生成・管理する音源ファイルを増やさずに済むため)。
+- **ファンファーレ(交渉成立・支払い成功)**: `negotiate/assets/sfx/fanfare.mp3`があれば優先して再生し、無い/再生失敗時は上昇アルペジオの合成音に自動フォールバックする(`playFanfare()`)。`enterPaymentPhase()`(価格確定時)と、`enterReceiptPhase()`内の`waitForUnlock()`が`unlocked`を返した瞬間(実際に解除成功した瞬間のみ、`tryRestoreReceipt`側では鳴らさない=古いレシート再表示時に鳴り直さない)の2箇所で呼んでいる。
+- **BGM(negotiate・spectator両方)**: それぞれの`assets/bgm.mp3`をループ再生。ブラウザの自動再生ブロックを避けるため、negotiateは「ウォレットを接続」ボタンのクリック(確実なユーザー操作)をきっかけに開始し、spectatorはボタン操作の無い投影専用画面のため、起動時に「🔈音声を有効にする」と表示する全画面オーバーレイを追加し、設営時にスタッフが1回タップして開始する運用にした。
+- **ミュート設定(negotiateのみ)**: 右上固定の🔊/🔇ボタンで全体をオン/オフでき、`localStorage`(`ichigo_sound_muted`)に保存され次回も引き継ぐ。
+- **BGM・ファンファーレの音源ファイルはまだ生成していない**: どちらも音源が無い場合は re-play が404で静かに失敗するだけ(catchで握りつぶし)で、ページの動作自体は壊れない。実際にNode+Playwright(headless Chrome)でnegotiate/spectator両ページを読み込み、ボタン操作もシミュレートしてコンソールエラーを確認したところ、音源未配置の404以外のエラーは出ていないことを確認済み。
+- **音源生成の方針**: Lyria RealTime(AI Studioの「Prompt DJ」)は常時ジャム演奏し続けるリアルタイム生成モデルで、短いキーワード的なプロンプトを重ねる方式(画像生成の長文プロンプトとは書き方が異なる)。BGMのような継続音源には向くが、単発の短い効果音を1回だけピンポイントで作るのには不向きなため、ファンファーレは「合成音のままで十分」という判断もあり得る前提で、生成する場合の代替プロンプトのみ添えた。実際に生成した`bgm.mp3`/`fanfare.mp3`は`negotiate/assets/`・`spectator/assets/`(bgm.mp3のみ両方に同じファイルを配置)・`negotiate/assets/sfx/`(fanfare.mp3)に置けばそのまま有効になる。
+
+## 来場者向け紹介ページ(仕組み・使い方 + 制作秘話・動画)の計画確定(2026-07-13)
+
+`negotiate`/`payment`とは別に、当日会場で来場者が読む紹介ページを新規に1ページ作る計画を`/plan`で立てた。計画書全文: `/Users/kuramochikeito/.claude/plans/playful-launching-matsumoto.md`(まだ実装はしていない)。
+
+- **配置場所**: `ichigo`本体とは別の新規GitHubリポジトリ `https://github.com/KeitoKuramochi/ichigo_gatya_web.git`(2026-07-13時点で完全に空、ローカル未クローン)にpushし、Vercelでデプロイする方針。**このリポジトリは`ichigo`フォルダの外になるため、実装セッションを始める際は、クローン先とこのフォルダ限定フックの許可範囲について改めて確認すること。**
+- **構成**: 1ページ、fuwachan.com風のsticky/アンカーナビで以下6項目にジャンプ: 仕組み解説/あそびかたステップ(5ステップ)/制作秘話タイムライン/スタッフ紹介(本人+もう1名)/制作動画/「ガチャに挑戦する」CTA(`https://ichigo-gatya.onrender.com/negotiate/`へ)。ボツ案ギャラリーは不要と判断し却下。
+- **デザイン**: `negotiate/index.html`のトークン・コンポーネント(朱赤/藍/生成りクリーム、Shippori Mincho×Zen Maru Gothic、`.priceTag`、`.counterLedge`、屋台のヒーロー演出)を完全踏襲。共有パッケージ化はせず、コピーして流用する方針(別リポジトリ・別更新サイクルのため)。
+- **あそびかたステップの画像割り当て**: 5ステップに対し表情画像は4種(greet/thinking/decided/thanks)しかないため、①QR読み取り・②ウォレット接続の2ステップに`ichigoban-greet.png`を共有させ、③交渉=thinking/④支払う=decided/⑤受け取り=thanksは本番のnegotiateページの表情切り替えと完全一致させる。
+- **未確定(進行中)**: 制作動画はまだ制作中・縦横比未定(当日までに用意予定) → レスポンシブな`<video>`埋め込み+「公開準備中」プレースホルダーを先に実装し、動画ファイルは`video/`フォルダに後から追加するだけで済む構造にする。制作秘話・スタッフ紹介用の実写真も未撮影 → 共通クラス`.photoBox`のプレースホルダー枠を用意し、後から`<img>`に差し替えるだけで済むようにする。
+- **新規に生成する画像素材**: `VISUAL_DESIGN_PROMPTS.md`にE章として追記予定(仕組み解説の説明イラスト`mechanism-diagram.png`、動画未公開時のポスター`video-poster.png`が必須、スタッフ用アバター枠とアンカーナビ用アイコン6種は任意)。
+- **`negotiate/index.html`への追記予定**: `.lead`直後に新ページへの控えめなテキストリンクを1行追加する(「🍓 ICHIGOガチャガチャってなに?しくみ・つくった話はこちら」)。
+- **メモ運用の方針確認**: このプロジェクトでは、会話をまたぐ記録は(セッション横断の別ディレクトリの)メモリ機能ではなく、この`NOTES.md`のようにこのフォルダ内のマークダウンに一本化する、とユーザーから明示指示があった(2026-07-13)。今後もこの方式を継続すること。
+
+## 紹介ページ(story/)を`ichigo`フォルダ内に実装し、Playwrightで見た目を検証(2026-07-13)
+
+上記の計画に基づき、まず`ichigo/story/`(フックで書き込みが許可されている場所)の中に実装し、Playwrightで見た目を確認しながら仕上げた。**別リポジトリ`ichigo_gatya_web`へは未pushで、クローン先・フック許可範囲の相談もまだ**(このセッションでは`ichigo`内で作業を完結させた)。
+
+- `story/index.html`: 計画通り、ヒーロー→sticky/アンカーナビ(しくみ/あそびかた/制作秘話/スタッフ/動画/挑戦するの6タイル、`IntersectionObserver`でアクティブハイライト)→仕組み解説→あそびかたステップ(5ステップ、`ichigoban-greet/thinking/decided/thanks`を割り当て)→制作秘話タイムライン(`.photoBox`プレースホルダー)→スタッフ紹介(2名、プレースホルダー)→制作動画(`.videoFrame`+`.videoPlaceholder`)→フッターCTA、の構成で実装。デザイントークン・コンポーネント(`.stallHero`/`.counterLedge`/`.priceTag`/ボタン)は`negotiate/index.html`と同一のものをコピーして使用。
+- `story/assets/`: `negotiate/assets/`から`header-banner.png`/`logo.png`/`ichigoban-*.png`/`paper-texture-tile.jpg`/`favicon.png`をコピー。
+- **「もっと派手に」という要望に対して**、AI画像生成ツールは使わず(このセッションでは接続されていない)、手描きSVG・CSSで華やかさを追加した: (1)仕組み解説セクションに、送金→確認→カプセル排出の3コマをSVGで手描き(ガチャガチャの機械とカプセルのアイコンも自作)、(2)ヒーロー直下に祭りの吹き流し(のぼり旗)風の帯を追加、(3)セクション見出しに絵文字+色分け(朱赤/藍/からし)を付けて視認性とにぎやかさを両立、(4)CTAボタンに光の帯が流れるシャインアニメーションを追加、(5)フッター前に🍓の区切り装飾。仕組み解説図やスタッフ用アバター枠を`VISUAL_DESIGN_PROMPTS.md`と同じ運用でGoogle AI Studio生成のイラストに差し替えることも可能(`story/README.md`にプロンプト例を記載)だが、必須ではない見た目まで仕上げてある。
+- **Playwrightで見つけて直した実際の不具合**: 動画セクションの縦横比自動補正JS(`loadedmetadata`イベント待ち)が、小さいローカル動画では読み込みが速すぎてイベント発火前にリスナー登録が完了し、`videoFrame`のaspect-ratioが更新されないバグがあった。`video.readyState>=1`なら即時反映、そうでなければ`loadedmetadata`を待つ、という両対応に修正。修正前後をffmpegで生成した縦(9:16)・横(16:9)のテスト動画で実機確認済み(縦動画が正しく縦長の枠に収まることを確認)。
+- `negotiate/index.html`: `.lead`直後とレシート画面の`receiptThanks`直後に、story/ページへのリンクを1行追加(`https://ichigo-gatya-web.vercel.app/`という仮のURLで、`<!-- TODO -->`コメント付き。story/を別リポジトリにpushしてVercelデプロイが確定したら、この2箇所のhrefを実際のURLに書き換える必要がある)。
+- `story/README.md`: 動画・写真の差し替え手順と、別リポジトリへの持ち出し方をまとめた。
+- **未実施(申し送り)**: (1) `story/`を実際に`ichigo_gatya_web`リポジトリへpushしてVercelにデプロイする作業、(2) それに伴う`negotiate/index.html`内2箇所の仮URLの本番URLへの差し替え、(3) 制作秘話・スタッフ紹介の実写真撮影と`.photoBox`への差し込み、(4) 制作動画の完成とファイル配置。
+
+## story/を`ichigo_gatya_web`リポジトリへpush(2026-07-14)
+
+ユーザーの明示指示で、`story/`の中身を`https://github.com/KeitoKuramochi/ichigo_gatya_web.git`へpushした。フックは「`ichigo`フォルダ配下以外へのWrite/Edit禁止」なので、**`ichigo/story/`ディレクトリの中で`git init`し、そこに新しいリモートを設定してpushする**方法を取った(ローカルにファイルを書き込む場所は一切`ichigo`フォルダの外に出ていない。pushはネットワーク越しにGitHubへ送るだけなので、フックの制約と矛盾しない)。`story/.git`は`ichigo`本体のgit管理下ではなく独立したリポジトリで、`ichigo`側の`git status`には影響しない(`story/`は引き続き`ichigo`側では未追跡のディレクトリとして扱われる)。
+
+- `gh auth status`でKeitoKuramochiアカウントとして認証済み(`repo`スコープあり)だったため、追加のログイン作業なしでpushできた。
+- 初回コミット(`c88ae06`)を`main`ブランチとしてpush、GitHub API(`gh api repos/.../contents`)で反映を確認済み。
+- **まだ未実施**: Vercelでのデプロイ設定(リポジトリ連携はユーザー側でVercelダッシュボードから行う想定)、それに伴う`negotiate/index.html`内2箇所の仮URL(`https://ichigo-gatya-web.vercel.app/`)の本番URLへの差し替え。Vercelのデプロイ自体はこのセッションでは行っていない(認証情報が無いため)。
+
+### 仕組み解説の誤り修正(2026-07-14)
+
+`story/index.html`の「仕組み解説」と「STEP 5」で、送金が確認されると**カプセルが自動的に排出される**かのような説明・イラストになっていたが、実際は**ロックが解除されるだけで、ガチャガチャ本体のレバーは来場者本人が手で回す**仕様。ユーザー指摘を受けて修正:
+
+- 仕組み解説のSVG図(3コマ目)を「カプセルが機械から出てくる絵」から「ロック解除ランプ+自分で回すハンドル(↻)」の絵に描き直し、キャプションも「③ カプセルがコロンと出てくる」→「③ ロックが解除される(回すのは自分で!)」に変更。
+- あそびかたSTEP 5の説明文も「ロックが解除されるので、カプセルを取り出してください」→「実機のロックが解除されます(自動で出てくるわけではありません)。あとはガチャガチャのレバーを自分の手で回して、カプセルを受け取ってください」に修正。
+- 修正をコミット(`9edc77d`)してGitHubへpush済み。
+
+## オンライン参加(ウォレット接続→AI交渉→ICHIGO送金→NFT受け取り)機能を新規実装(2026-07-15)
+
+会場に来られない人もオンラインでAI店番と値切り交渉し、ICHIGOを送金してその場でNFTを受け取れるようにしたいという要望を受け、`/plan`で計画を立ててから実装した(計画書全文: `/Users/kuramochikeito/.claude/plans/compiled-stirring-stardust.md`)。当初「今回は土台だけ」の予定だったが、本番(2026-07-16)に間に合わせたいという方針転換を受け、実際に動く状態まで一気に実装した。
+
+- **現地用とは完全に別物として実装**(要望通り): `bridge/server.js`の既存`negotiationSessions`/`currentSessionId`(実機1台=同時1交渉の前提)には一切手を入れず、新しい独立した`onlineSessions` Map・`/online-negotiate-*`系エンドポイントを追加した(既存の`/negotiate-*`は無変更、diffは追加行のみであることを確認済み)。デザイン(配色・フォント・キャラクター画像)だけは`negotiate/index.html`と共通にしている。
+- **同時接続は2人まで**(`ONLINE_MAX_CONCURRENT`、既定2)。3人目は429で弾かれ、`online/index.html`側は自動的に5秒後リトライする(現地の物理的な行列に相当するものが無いため)。
+- **決済はICHIGOを実際に送金**(現地と同じ経済的重み)。`/online-verify-and-claim`が既存の`findValidTransfer`/`usedTxHashes`/`isRecentEnough`等をそのまま再利用してオンチェーン検証する。
+- **NFTはERC-1155 + EIP-712署名バウチャー方式**。`contracts/contracts/IchigoGachaNFT.sol`(OpenZeppelinのERC1155/Ownable/EIP712/ECDSAを利用)。決済確認後、サーバーが`bridge/prize-pool.js`(景品6種、重み付き抽選)で景品を選び、専用鍵(`ONLINE_MINTER_PRIVATE_KEY`、署名専用でETHを保有する必要が無い)でバウチャーに署名し、参加者自身のウォレットが`claim(voucher, signature)`を呼んでガス代を払ってmintする(バックエンドはガス代を払わない、という要望通り)。コントラクトはICHIGO/ETHを一切扱わない設計にして、初めてのSolidity実装によるミスの影響範囲を絞った。Hardhatでテスト(正常claim・リプレイ拒否・他人のvoucher拒否・期限切れ拒否・owner権限)を書き、全て通過済み。
+  - OpenZeppelin 5.6系が`mcopy`(EIP-5656, Cancunで追加されたopcode)を使うため、`hardhat.config.js`で`evmVersion: "cancun"`を明示指定する必要があった(指定しないとコンパイルエラーになる)。OptimismはEcotoneアップグレードでCancun相当のEVM opcodeに対応済みなので、メインネットデプロイ自体には支障ない。
+  - NFTのメタデータ・画像は`bridge/nft-metadata/:idHex`(その場でJSON生成)・`bridge/nft-images/`(静的配信)で自己ホスト。IPFS化はスコープ外(将来の改善点)。
+- **`GACHA_NFT_MOCK_MODE`(テスト用)**: コントラクト未デプロイでもフロー全体(ウォレット接続〜AI交渉〜実際のICHIGO送金〜景品抽選)を試せるよう、ダミー署名を返し`online/index.html`側もclaim()呼び出しをスキップする仕組みを用意した。本番では必ず未設定にすること。
+- **投影画面(`spectator/index.html`)**: 既存の`idleView`/`activeView`/`completedView`とそのpoll()は一切変更せず、`stageLayout`(flex row)で`mainStage`(既存そのまま)+`onlinePanel`(新規、最大2タイル)に分割した。オンライン0件ならパネルを隠し`mainStage`が全幅に戻る。当選演出(`#revealToast`)は現地の`completedView`(手動解除のみ)とは別方式にした: 自動7秒表示+1件ずつ順番に(同時完了しても積み上がらない)、見た目も金枠+「オンライン参加」タグで現地の演出と混同しないようにした。
+- **管理者機能は最小限に留めた**(時間優先度を下げた): `/online-negotiate-admin-list`・`/online-negotiate-admin-cancel`のみ実装。価格の直接上書き(オンライン版の`/negotiate-admin-set-price`相当)・当選演出キューの早消しボタンは未実装(必要になれば追加する)。
+- 新規ファイル: `contracts/`(Hardhatパッケージ一式)、`bridge/prize-pool.js`、`online/index.html`+`online/assets/`(negotiate/assetsからコピー)、`bridge/nft-images/`(現時点ではプレースホルダー画像、既存の`image/icon-*.png`等を仮に流用)。
+
+### 未実施・申し送り事項(重要)
+
+- **コントラクトの実デプロイがまだ**: `contracts/scripts/deploy.js`は書いたが、実際のデプロイには(1)新規ウォレットの秘密鍵を`contracts/.env`の`DEPLOYER_PRIVATE_KEY`に設定、(2)そのウォレットにOptimism上で少額のETH(デプロイ用ガス代)を送金、(3)`npm run deploy:mainnet`を実行、という、ユーザー自身の鍵・実際のETH送金が必要な操作が残っている。デプロイ後、得られたコントラクトアドレスを`bridge/.env`の`NFT_CONTRACT_ADDR`に、デプロイに使った秘密鍵を`ONLINE_MINTER_PRIVATE_KEY`に設定し、`GACHA_NFT_MOCK_MODE`を外して再起動すること。
+- **景品画像が仮**: `bridge/nft-images/`は現状、既存の`image/icon-*.png`等を仮に流用しているだけ(prize-1〜5がAI生成イラスト5枚、prize-6-specialが手描きレア1枚に対応する想定)。実際の画像が用意でき次第、同じファイル名で差し替えるか、`bridge/prize-pool.js`の`image`フィールドを実ファイル名に書き換えること。
+- **`ONLINE_MINTER_PRIVATE_KEY`の鍵管理**: 資金は保有しないが、漏洩すると無期限に不正mintされ得る。会期後も有効であり続けるため、`/test-move`等の「学祭デモだから直さない」という緩い基準とは別に扱うべき(必要なら`setTrustedMinter()`で鍵をローテーションできる)。
+- **参加者側のOptimismガス代**: mint(claim)は参加者自身のウォレットが実行するため、少額のETHが必要(ユーザー確認: 今回は問題にならない前提)。
+- ローカルの動作確認は`GACHA_NFT_MOCK_MODE=1`+ダミーの`ANTHROPIC_API_KEY`で行い、同時2セッションの受付・3セッション目の429・`/online-negotiate-current`のセッション一覧・`/online-negotiate-admin-list`/`-cancel`・`/nft-metadata/:idHex`をcurlで確認済み。**実際のANTHROPIC_API_KEY・実際のICHIGO送金・実際のコントラクトへのclaim()を伴うE2Eは未実施**(本番前に必ず一度、少額の実送金と実mintで通しテストすること)。

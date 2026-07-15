@@ -23,6 +23,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { getNegotiationReply } from './negotiation.js';
+import { pickPrize, getPrizeTeasers, PRIZE_POOL } from './prize-pool.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const GAME_DIR = path.join(__dirname, '..', 'payment');
@@ -30,6 +31,8 @@ const TEST_DIR = path.join(__dirname, '..', 'test');
 const ADMIN_DIR = path.join(__dirname, '..', 'admin');
 const NEGOTIATE_DIR = path.join(__dirname, '..', 'negotiate');
 const SPECTATOR_DIR = path.join(__dirname, '..', 'spectator');
+const ONLINE_DIR = path.join(__dirname, '..', 'online');
+const NFT_IMAGES_DIR = path.join(__dirname, 'nft-images');
 const USED_TX_FILE = path.join(__dirname, 'used-tx-hashes.json');
 
 // 確定から一定ブロック数経つまでは「まだ覆る可能性がある」として受け付けない
@@ -139,6 +142,33 @@ if (NEGOTIATION_ENABLED && !(NEGOTIATE_ABSOLUTE_FLOOR_NUM >= 0 && NEGOTIATE_ABSO
   process.exit(1);
 }
 
+// オンライン参加(ウォレット接続→AI交渉→ICHIGO送金→NFT受け取り)機能。現地用の
+// negotiationSessions/currentSessionIdとは完全に別物として扱う(状態管理・エンドポイントを
+// 共有しない)。AI交渉自体は現地と同じgetNegotiationReply()を使うため、AIが無効
+// (NEGOTIATION_ENABLED=false)ならオンライン参加も無効にする(現地のmanualモードのような
+// 「スタッフが対面で代わりに交渉する」代替が、遠隔の参加者には用意できないため)。
+//
+// NFTの配布(mint)は、参加者自身のウォレットが署名付きバウチャーを使ってclaimする方式。
+// GACHA_NFT_MOCK_MODE='1'ならコントラクト未デプロイでも(偽の署名で)フロー全体を試せる。
+// 本番ではNFT_CONTRACT_ADDR/ONLINE_MINTER_PRIVATE_KEYの両方を設定し、GACHA_NFT_MOCK_MODEは未設定にする。
+const {
+  GACHA_NFT_MOCK_MODE,
+  NFT_CONTRACT_ADDR,
+  ONLINE_MINTER_PRIVATE_KEY,
+  ONLINE_MAX_CONCURRENT = '2',
+  ONLINE_VOUCHER_TTL_MS = String(24 * 60 * 60 * 1000),
+} = process.env;
+
+const ONLINE_MOCK_MODE = GACHA_NFT_MOCK_MODE === '1';
+const ONLINE_NFT_CONFIGURED = ONLINE_MOCK_MODE || Boolean(NFT_CONTRACT_ADDR && ONLINE_MINTER_PRIVATE_KEY);
+// AIが有効、かつNFTの配布方法(mockまたは実コントラクト)が用意できている場合のみ、
+// オンライン参加そのものを受け付ける(実ICHIGOを払わせておいてNFTを渡せない、という
+// 事故を避けるため、決済より前の入口(/online-negotiate-start)でまとめて弾く)。
+const ONLINE_ENABLED = NEGOTIATION_ENABLED && ONLINE_NFT_CONFIGURED;
+const ONLINE_MAX_CONCURRENT_NUM = parseInt(ONLINE_MAX_CONCURRENT, 10);
+const ONLINE_VOUCHER_TTL_MS_NUM = parseInt(ONLINE_VOUCHER_TTL_MS, 10);
+const ONLINE_CHAIN_ID = 10; // Optimismメインネット。ICHIGO送金・NFTコントラクトともに同じチェーン
+
 console.log(
   // /negotiate/自体は常に使える(AIが無ければスタッフが直接価格を決めるmanualモードに
   // なるだけ)。ここで有効/無効と表示しているのは「AIによる自動値切り」の部分だけ。
@@ -152,6 +182,15 @@ if (CF_ACCOUNT_ID && CF_API_TOKEN) {
   );
 }
 
+console.log(
+  ONLINE_ENABLED
+    ? `オンライン参加機能: 有効(同時最大${ONLINE_MAX_CONCURRENT_NUM}人, NFT配布=${ONLINE_MOCK_MODE ? 'モックモード(テスト運用中)' : `実コントラクト ${NFT_CONTRACT_ADDR}`})`
+    : `オンライン参加機能: 無効(${!NEGOTIATION_ENABLED ? 'AI店番が無効' : 'NFT_CONTRACT_ADDR/ONLINE_MINTER_PRIVATE_KEYまたはGACHA_NFT_MOCK_MODEが未設定'})`
+);
+if (ONLINE_MOCK_MODE) {
+  console.warn('⚠️ GACHA_NFT_MOCK_MODE=1: オンライン参加のNFT配布は実際にはmintされません(テスト運用)。本番前に必ず無効化してください。');
+}
+
 const ERC20_ABI = [
   'event Transfer(address indexed from, address indexed to, uint256 value)',
   'function decimals() view returns (uint8)',
@@ -160,6 +199,19 @@ const ERC20_ABI = [
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const tokenInterface = new ethers.Interface(ERC20_ABI);
 const tokenContract = new ethers.Contract(TOKEN_ADDR, ERC20_ABI, provider);
+
+// IchigoGachaNFT.sol(contracts/)側のclaim()と対応する、mint検知用の最小ABI。
+// バウチャーの署名(signTypedData)自体はコントラクトを介さないオフチェーン処理なので、
+// ここではclaim()の関数シグネチャ(参加者が実際に呼ぶ)とTransferSingleイベント
+// (/online-claim-confirmでの検証用)だけを持たせる。
+const NFT_ABI = [
+  'function claim(tuple(address wallet, uint256 prizeId, bytes32 sessionNonce, uint256 expiry) voucher, bytes signature) external',
+  'event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)',
+];
+const nftInterface = new ethers.Interface(NFT_ABI);
+// バウチャーへの署名専用ウォレット。オフチェーン署名(signTypedData)しか行わないため、
+// providerに接続する必要も、ETHを保有する必要も無い(mint自体のガス代は参加者が払う)。
+const onlineMinterWallet = ONLINE_MINTER_PRIVATE_KEY ? new ethers.Wallet(ONLINE_MINTER_PRIVATE_KEY) : null;
 
 // プロセス再起動をまたいでも二重使用を防げるよう、使用済みtxHashをファイルに永続化する
 function loadUsedTxHashes() {
@@ -412,6 +464,67 @@ function applyFinalPrice(session, price) {
   session.status = 'awaiting-payment';
 }
 
+// ============================================================================
+// オンライン参加(ウォレット接続→AI交渉→ICHIGO送金→NFT受け取り)。
+// 現地(negotiationSessions/currentSessionId、実機1台=同時1交渉の前提)とは
+// 完全に別のMapで管理する。実機の解除とは無関係なので、ESP32・/poll-unlock側は
+// このセクションを一切参照しない。
+//
+// 状態遷移: negotiating(AI交渉中) → awaiting-payment(価格確定・送金待ち)
+//         → awaiting-claim(送金確認済み・景品抽選済み・mint待ち) → claimed(mint確認済み)
+//         / expired(放置)
+// ============================================================================
+const onlineSessions = new Map(); // sessionId -> {status, wallet, displayName, transcript, ...}
+
+// 直近の「こういうNFTが出ました」演出用の短命キュー。現地のlastCompleted(単一スロット、
+// 手動解除のみ)と違い、オンラインは同時に複数人が完了しうるため配列にし、投影ページ側で
+// 順番に1件ずつ表示させる(古いものはここで自動的に間引く)。
+const onlineReveals = [];
+const ONLINE_REVEAL_MAX_AGE_MS = 2 * 60 * 1000; // 投影側の表示時間(数秒)よりずっと長く持たせておくだけでよい
+
+function sweepStaleOnlineSessions() {
+  const now = Date.now();
+  for (const [sessionId, session] of onlineSessions) {
+    if (session.status === 'negotiating' && now - session.lastActivityAt > NEGOTIATE_SESSION_IDLE_MAX_AGE_MS) {
+      session.status = 'expired';
+    } else if (
+      session.status === 'awaiting-payment' &&
+      session.quoteExpiresAt &&
+      now > session.quoteExpiresAt
+    ) {
+      session.status = 'expired';
+    }
+    if ((session.status === 'claimed' || session.status === 'expired') && now - session.createdAt > 60 * 60 * 1000) {
+      onlineSessions.delete(sessionId);
+    }
+  }
+  while (onlineReveals.length && now - onlineReveals[0].revealedAt > ONLINE_REVEAL_MAX_AGE_MS) {
+    onlineReveals.shift();
+  }
+}
+
+// オンラインで現在「交渉中」または「送金待ち」の件数(=枠を占有している件数)。
+function countActiveOnlineSessions() {
+  let count = 0;
+  for (const session of onlineSessions.values()) {
+    if (session.status === 'negotiating' || session.status === 'awaiting-payment') count += 1;
+  }
+  return count;
+}
+
+// /negotiate-startの濫用防止(canStartNewNegotiationSession)と同じ考え方だが、
+// 現地用のレート制限とは完全に分けて数える(オンラインが混んでも現地に影響しないように)。
+let onlineNegotiateStartTimestamps = [];
+function canStartNewOnlineNegotiationSession() {
+  const now = Date.now();
+  onlineNegotiateStartTimestamps = onlineNegotiateStartTimestamps.filter(
+    (t) => now - t < NEGOTIATE_START_RATE_WINDOW_MS
+  );
+  if (onlineNegotiateStartTimestamps.length >= NEGOTIATE_START_RATE_LIMIT) return false;
+  onlineNegotiateStartTimestamps.push(now);
+  return true;
+}
+
 const app = express();
 app.use(cors()); // Vercel等、別オリジンで配信されたpayment/index.htmlからも叩けるようにする
 app.use(express.json());
@@ -426,6 +539,8 @@ app.use('/test', express.static(TEST_DIR)); // モーターのテスト用ペー
 app.use('/admin', express.static(ADMIN_DIR)); // 補充用ロックの管理者ページを/admin/以下で配信
 app.use('/negotiate', express.static(NEGOTIATE_DIR)); // AI店番との値切り交渉ページを/negotiate/以下で配信
 app.use('/spectator', express.static(SPECTATOR_DIR)); // 交渉の様子を投影する観客用ページを/spectator/以下で配信
+app.use('/online', express.static(ONLINE_DIR)); // オンライン参加ページを/online/以下で配信
+app.use('/nft-images', express.static(NFT_IMAGES_DIR)); // NFTの景品画像(nft-metadataのJSONが指す先)
 
 app.post('/verify-and-unlock', async (req, res) => {
   const { txHash, sessionId } = req.body ?? {};
@@ -934,6 +1049,470 @@ app.post('/negotiate-receipt', (req, res) => {
     paidAt: purchase.completedAt,
     unlockStatus: unlockRequests.get(purchase.txHash)?.status ?? 'unknown',
     transcript: purchase.transcript || [],
+  });
+});
+
+// ============================================================================
+// オンライン参加エンドポイント群。/negotiate-*とは意図的に完全に別実装にしている
+// (「現地用とオンライン用は完全に別物として扱う」という方針。既存の/negotiate-*の
+// コードは一切変更していない)。ただし汎用的な純粋ロジック(getNegotiationReply/
+// findValidTransfer/sanitizeDisplayName/maskWallet/usedTxHashes等)はそのまま再利用する。
+// ============================================================================
+
+// オンライン参加ページ(online/index.html)が最初に叩く、機能そのものの有効/無効確認。
+// AI無効時・NFT配布方法未設定時はここで理由付きで断る(決済させてからNFTを渡せない、
+// という事故を避けるため、参加登録の入口でまとめて弾く)。
+app.get('/online-status', (req, res) => {
+  sweepStaleOnlineSessions();
+  return res.json({
+    enabled: ONLINE_ENABLED,
+    maxConcurrent: ONLINE_MAX_CONCURRENT_NUM,
+    activeCount: countActiveOnlineSessions(),
+    mock: ONLINE_MOCK_MODE,
+  });
+});
+
+// オンライン用の景品お披露目(モザイク/サンプル表示)。実画像URLは含めず、
+// 名前と大まかな出現率だけを返す(ネタバレ防止)。
+app.get('/prize-pool-teaser', (req, res) => {
+  return res.json({ ok: true, prizes: getPrizeTeasers() });
+});
+
+app.post('/online-negotiate-start', (req, res) => {
+  if (!ONLINE_ENABLED) {
+    return res.status(503).json({ ok: false, error: 'オンライン参加は現在準備中です' });
+  }
+  sweepStaleOnlineSessions();
+  const { wallet, displayName } = req.body ?? {};
+  if (typeof wallet !== 'string' || !/^0x[0-9a-fA-F]{40}$/.test(wallet)) {
+    return res.status(400).json({ ok: false, error: 'walletの形式が不正です' });
+  }
+  if (displayName !== undefined && typeof displayName !== 'string') {
+    return res.status(400).json({ ok: false, error: 'displayNameの形式が不正です' });
+  }
+  const normalizedWallet = wallet.toLowerCase();
+  const sanitizedName = sanitizeDisplayName(displayName);
+
+  // 同じウォレットで既にアクティブなセッションがあれば、新規作成せずそれを返す
+  // (ページ再読み込み等での復帰。/negotiate-startの再接続ロジックと同じ考え方)。
+  for (const [sid, existing] of onlineSessions) {
+    if (
+      existing.wallet === normalizedWallet &&
+      (existing.status === 'negotiating' || existing.status === 'awaiting-payment' || existing.status === 'awaiting-claim')
+    ) {
+      if (sanitizedName) existing.displayName = sanitizedName;
+      return res.json({
+        ok: true,
+        sessionId: sid,
+        status: existing.status,
+        displayName: existing.displayName,
+        price: existing.currentPrice,
+        turn: existing.turnCount,
+        maxTurn: NEGOTIATE_MAX_TURNS_NUM,
+        transcript: existing.transcript,
+        prize: existing.prize || null,
+      });
+    }
+  }
+
+  if (countActiveOnlineSessions() >= ONLINE_MAX_CONCURRENT_NUM) {
+    return res.status(429).json({ ok: false, error: `現在オンライン参加が混み合っています(最大${ONLINE_MAX_CONCURRENT_NUM}人)。しばらくしてからもう一度お試しください` });
+  }
+  if (!canStartNewOnlineNegotiationSession()) {
+    return res.status(429).json({ ok: false, error: '現在混み合っています。少し時間を置いてもう一度お試しください' });
+  }
+
+  const startingPrice = Number(COST);
+  const openingReply = `いらっしゃい!ICHIGOガチャガチャへようこそ。オンラインでも同じお値段(${startingPrice} ICHIGO)から始めるよ。何か言いたいことある?`;
+  const sessionId = crypto.randomUUID();
+  const now = Date.now();
+  const session = {
+    status: 'negotiating',
+    busy: false,
+    wallet: normalizedWallet,
+    displayName: sanitizedName,
+    transcript: [{ role: 'assistant', content: openingReply }],
+    startingPrice,
+    currentPrice: startingPrice,
+    turnCount: 0,
+    createdAt: now,
+    lastActivityAt: now,
+    finalPriceWei: null,
+    quoteExpiresAt: null,
+    prize: null,
+    voucher: null,
+    claimTxHash: null,
+  };
+  onlineSessions.set(sessionId, session);
+
+  return res.json({
+    ok: true,
+    sessionId,
+    status: session.status,
+    displayName: session.displayName,
+    price: session.currentPrice,
+    turn: session.turnCount,
+    maxTurn: NEGOTIATE_MAX_TURNS_NUM,
+    transcript: session.transcript,
+    prize: null,
+  });
+});
+
+app.post('/online-negotiate-message', async (req, res) => {
+  sweepStaleOnlineSessions();
+  const { sessionId, message } = req.body ?? {};
+  if (typeof sessionId !== 'string' || typeof message !== 'string' || !message.trim()) {
+    return res.status(400).json({ ok: false, error: 'sessionId/messageが不正です' });
+  }
+  if (message.length > 500) {
+    return res.status(400).json({ ok: false, error: 'メッセージが長すぎます(500文字まで)' });
+  }
+  const session = onlineSessions.get(sessionId);
+  if (!session || session.status !== 'negotiating') {
+    return res.status(400).json({ ok: false, error: 'このセッションは交渉中ではありません' });
+  }
+  if (session.busy) {
+    return res.status(409).json({ ok: false, error: '前のやり取りを処理中です。少し待ってからもう一度お試しください' });
+  }
+  session.busy = true;
+
+  try {
+    session.transcript.push({ role: 'user', content: message.trim() });
+
+    const result = await getNegotiationReply({
+      transcript: session.transcript,
+      startingPrice: session.startingPrice,
+      floorPrice: NEGOTIATE_FLOOR_COST_NUM,
+      absoluteFloor: NEGOTIATE_ABSOLUTE_FLOOR_NUM,
+      turnCount: session.turnCount,
+      maxTurns: NEGOTIATE_MAX_TURNS_NUM,
+      displayName: session.displayName,
+      apiKey: ANTHROPIC_API_KEY,
+      model: ANTHROPIC_MODEL,
+      geminiApiKey: GEMINI_API_KEY,
+      geminiModel: GEMINI_MODEL,
+      cloudflareAccountId: CF_ACCOUNT_ID,
+      cloudflareApiToken: CF_API_TOKEN,
+      cloudflareModel: CF_MODEL,
+    });
+
+    let replyText;
+    if (result) {
+      consecutiveAiFailures = 0;
+      replyText = result.reply;
+      session.currentPrice = Math.min(
+        session.currentPrice,
+        Math.max(NEGOTIATE_ABSOLUTE_FLOOR_NUM, Math.round(result.price))
+      );
+    } else {
+      consecutiveAiFailures += 1;
+      replyText = 'すみません、少し混み合っているみたいです。もう一度話しかけてもらえますか?';
+    }
+
+    session.transcript.push({ role: 'assistant', content: replyText });
+    session.lastActivityAt = Date.now();
+
+    if (result) {
+      session.turnCount += 1;
+      if (session.turnCount >= NEGOTIATE_MAX_TURNS_NUM) {
+        applyFinalPrice(session, session.currentPrice);
+      }
+    }
+
+    return res.json({
+      ok: true,
+      reply: replyText,
+      price: session.currentPrice,
+      turn: session.turnCount,
+      maxTurn: NEGOTIATE_MAX_TURNS_NUM,
+      status: session.status,
+      done: session.status === 'awaiting-payment',
+    });
+  } finally {
+    session.busy = false;
+  }
+});
+
+app.post('/online-negotiate-finalize', (req, res) => {
+  sweepStaleOnlineSessions();
+  const { sessionId } = req.body ?? {};
+  const session = onlineSessions.get(sessionId);
+  if (!session) {
+    return res.status(404).json({ ok: false, error: 'セッションが見つかりません' });
+  }
+  if (session.busy) {
+    return res.status(409).json({ ok: false, error: '前のやり取りを処理中です。少し待ってからもう一度お試しください' });
+  }
+  if (session.status === 'negotiating') {
+    session.lastActivityAt = Date.now();
+    applyFinalPrice(session, session.currentPrice);
+  }
+  if (session.status !== 'awaiting-payment') {
+    return res.status(400).json({ ok: false, error: 'この価格では確定できません' });
+  }
+  return res.json({ ok: true, price: session.currentPrice, status: session.status });
+});
+
+app.post('/online-negotiate-cancel', (req, res) => {
+  sweepStaleOnlineSessions();
+  const { sessionId } = req.body ?? {};
+  const session = typeof sessionId === 'string' ? onlineSessions.get(sessionId) : null;
+  if (session && (session.status === 'negotiating' || session.status === 'awaiting-payment')) {
+    session.status = 'expired';
+  }
+  return res.json({ ok: true });
+});
+
+// 投影用ページ(spectator/index.html)がポーリングする。現地の/negotiate-currentとは別の
+// エンドポイントで、最大ONLINE_MAX_CONCURRENT件のセッション概要(タイル表示用に軽量化、
+// 直近の発言のみ)+直近の当選(reveal)キューを返す。認証不要(現地の/negotiate-currentと同じ信頼レベル)。
+app.get('/online-negotiate-current', (req, res) => {
+  sweepStaleOnlineSessions();
+  const sessions = [];
+  for (const session of onlineSessions.values()) {
+    if (session.status !== 'negotiating' && session.status !== 'awaiting-payment' && session.status !== 'awaiting-claim') continue;
+    const lastMessage = session.transcript.length ? session.transcript[session.transcript.length - 1].content : '';
+    sessions.push({
+      displayName: session.displayName || maskWallet(session.wallet),
+      status: session.status,
+      price: session.currentPrice,
+      turn: session.turnCount,
+      maxTurn: NEGOTIATE_MAX_TURNS_NUM,
+      lastMessage,
+    });
+  }
+  return res.json({
+    sessions: sessions.slice(0, ONLINE_MAX_CONCURRENT_NUM),
+    reveals: onlineReveals,
+  });
+});
+
+// 決済確認後、景品を抽選してEIP-712バウチャーに署名する。/verify-and-unlockと同じ
+// オンチェーン検証ロジック(findValidTransfer/usedTxHashes/isRecentEnough)を再利用するが、
+// ESP32の解除リクエストは一切積まない(オンラインは物理カプセルを出さない)。
+app.post('/online-verify-and-claim', async (req, res) => {
+  if (!ONLINE_ENABLED) {
+    return res.status(503).json({ ok: false, error: 'オンライン参加は現在準備中です' });
+  }
+  const { txHash, sessionId } = req.body ?? {};
+  if (typeof txHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+    return res.status(400).json({ ok: false, error: 'txHashの形式が不正です' });
+  }
+  if (typeof sessionId !== 'string') {
+    return res.status(400).json({ ok: false, error: 'sessionIdが必要です' });
+  }
+
+  sweepStaleOnlineSessions();
+  const session = onlineSessions.get(sessionId);
+  if (!session || session.status !== 'awaiting-payment') {
+    return res.status(400).json({ ok: false, error: '交渉結果が見つからないか、まだ価格が確定していません' });
+  }
+  if (session.quoteExpiresAt && Date.now() > session.quoteExpiresAt) {
+    return res.status(400).json({ ok: false, error: '確定した価格の有効期限が切れています。もう一度交渉からやり直してください' });
+  }
+
+  if (usedTxHashes.has(txHash)) {
+    return res.status(409).json({ ok: false, error: 'このtxHashはすでに使用済みです' });
+  }
+
+  try {
+    const receipt = await getConfirmedReceiptWithRetry(txHash);
+    if (!receipt) {
+      return res.status(404).json({ ok: false, error: 'トランザクションが見つからないか、まだ十分に確定していません' });
+    }
+    if (receipt.status !== 1) {
+      return res.status(400).json({ ok: false, error: 'トランザクションが失敗しています' });
+    }
+    if (!(await isRecentEnough(receipt))) {
+      return res.status(400).json({ ok: false, error: '古すぎる取引です(過去の送金の使い回しは無効)' });
+    }
+
+    const transfer = findValidTransfer(receipt, session.finalPriceWei);
+    if (!transfer) {
+      return res.status(400).json({ ok: false, error: 'GAME_WALLET宛の有効なICHIGO送金が見つかりません' });
+    }
+    if (transfer.args.from.toLowerCase() !== session.wallet) {
+      return res.status(400).json({ ok: false, error: '送金元のウォレットが交渉時と一致しません' });
+    }
+
+    if (usedTxHashes.has(txHash)) {
+      return res.status(409).json({ ok: false, error: 'このtxHashはすでに使用済みです' });
+    }
+    usedTxHashes.add(txHash);
+    saveUsedTxHashes();
+    console.log(`オンライン決済 検証OK: ${txHash}`);
+
+    const prize = pickPrize();
+    const sessionNonce = ethers.keccak256(ethers.toUtf8Bytes(sessionId));
+    const expiry = Math.floor(Date.now() / 1000) + Math.floor(ONLINE_VOUCHER_TTL_MS_NUM / 1000);
+    const voucher = { wallet: session.wallet, prizeId: prize.id, sessionNonce, expiry };
+
+    let signature;
+    if (ONLINE_MOCK_MODE) {
+      // モックモード: コントラクト未デプロイでもフロー全体を試せるよう、有効な署名の
+      // 代わりにダミー値を返す。クライアント側はmock:trueを見て実際のclaim()呼び出しを
+      // スキップし、演出だけシミュレーションする(本物のNFTは配布されない)。
+      signature = '0x' + '00'.repeat(65);
+    } else {
+      const domain = {
+        name: 'IchigoGachaNFT',
+        version: '1',
+        chainId: ONLINE_CHAIN_ID,
+        verifyingContract: NFT_CONTRACT_ADDR,
+      };
+      const types = {
+        ClaimVoucher: [
+          { name: 'wallet', type: 'address' },
+          { name: 'prizeId', type: 'uint256' },
+          { name: 'sessionNonce', type: 'bytes32' },
+          { name: 'expiry', type: 'uint256' },
+        ],
+      };
+      signature = await onlineMinterWallet.signTypedData(domain, types, voucher);
+    }
+
+    session.status = 'awaiting-claim';
+    session.prize = prize;
+    session.voucher = { voucher, signature };
+
+    recentPurchases.unshift({
+      txHash,
+      price: ethers.formatUnits(transfer.args.value, tokenDecimals),
+      wallet: transfer.args.from,
+      displayName: session.displayName,
+      mode: 'online',
+      completedAt: Date.now(),
+      transcript: session.transcript,
+    });
+    if (recentPurchases.length > RECENT_PURCHASES_MAX) {
+      recentPurchases.length = RECENT_PURCHASES_MAX;
+    }
+
+    // 現地の投影ページでも「こういうNFTが出ました」を見せる演出のソース。mint(claim)自体が
+    // 成功したかどうかを待たず、景品が決まった時点で見せる(参加者がmintに手間取っても、
+    // 会場の演出自体は滞らせないため)。
+    onlineReveals.push({
+      sessionId,
+      displayName: session.displayName || maskWallet(session.wallet),
+      prize: { id: prize.id, name: prize.name, image: prize.image },
+      revealedAt: Date.now(),
+    });
+
+    return res.json({
+      ok: true,
+      txHash,
+      mock: ONLINE_MOCK_MODE,
+      contractAddress: ONLINE_MOCK_MODE ? null : NFT_CONTRACT_ADDR,
+      chainId: ONLINE_CHAIN_ID,
+      prize: { id: prize.id, name: prize.name, image: prize.image },
+      voucher,
+      signature,
+    });
+  } catch (err) {
+    console.error('online-verify-and-claim処理中にエラー:', err);
+    return res.status(500).json({ ok: false, error: 'サーバー内部エラー' });
+  }
+});
+
+// 参加者が実際にclaim()を叩いてmintした後の後追い通知(投影演出・レシート用)。
+// 参加者自身の成功画面表示はこれを待たない(mintのtx.wait()が成功した時点で即座に見せる)。
+app.post('/online-claim-confirm', async (req, res) => {
+  const { sessionId, txHash } = req.body ?? {};
+  const session = typeof sessionId === 'string' ? onlineSessions.get(sessionId) : null;
+  if (!session || session.status !== 'awaiting-claim') {
+    return res.status(400).json({ ok: false, error: 'このセッションはmint待ちの状態ではありません' });
+  }
+
+  if (!ONLINE_MOCK_MODE) {
+    if (typeof txHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+      return res.status(400).json({ ok: false, error: 'txHashの形式が不正です' });
+    }
+    try {
+      const receipt = await getConfirmedReceiptWithRetry(txHash, 5, 1000);
+      if (!receipt || receipt.status !== 1) {
+        return res.status(400).json({ ok: false, error: 'mintトランザクションが確認できません' });
+      }
+      const minted = receipt.logs.some((log) => {
+        if (log.address.toLowerCase() !== NFT_CONTRACT_ADDR.toLowerCase()) return false;
+        let parsed;
+        try {
+          parsed = nftInterface.parseLog(log);
+        } catch {
+          return false;
+        }
+        return (
+          parsed?.name === 'TransferSingle' &&
+          parsed.args.from === ethers.ZeroAddress &&
+          parsed.args.to.toLowerCase() === session.wallet &&
+          parsed.args.id === BigInt(session.prize.id)
+        );
+      });
+      if (!minted) {
+        return res.status(400).json({ ok: false, error: 'このトランザクションからmintを確認できませんでした' });
+      }
+    } catch (err) {
+      console.error('online-claim-confirm処理中にエラー:', err);
+      return res.status(500).json({ ok: false, error: 'サーバー内部エラー' });
+    }
+  }
+
+  session.status = 'claimed';
+  session.claimTxHash = ONLINE_MOCK_MODE ? txHash || null : txHash;
+  const purchase = recentPurchases.find((p) => p.wallet.toLowerCase() === session.wallet);
+  if (purchase) purchase.claimTxHash = session.claimTxHash;
+
+  return res.json({ ok: true });
+});
+
+// スタッフ用(時間があれば運用): 現在アクティブなオンラインセッション一覧。
+app.get('/online-negotiate-admin-list', (req, res) => {
+  if (!isValidNegotiateAdminSecret(req.get('X-Secret'))) {
+    return res.status(403).json({ ok: false, error: 'forbidden' });
+  }
+  sweepStaleOnlineSessions();
+  const sessions = [...onlineSessions.entries()]
+    .filter(([, s]) => s.status !== 'expired' && s.status !== 'claimed')
+    .map(([sessionId, s]) => ({
+      sessionId,
+      wallet: s.wallet,
+      displayName: s.displayName,
+      status: s.status,
+      price: s.currentPrice,
+      turn: s.turnCount,
+      transcript: s.transcript,
+    }));
+  return res.json({ ok: true, sessions });
+});
+
+// スタッフ用: 参加者のスマホが止まった等で放置されたオンラインセッションを強制終了する。
+app.post('/online-negotiate-admin-cancel', (req, res) => {
+  if (!isValidNegotiateAdminSecret(req.get('X-Secret'))) {
+    return res.status(403).json({ ok: false, error: 'forbidden' });
+  }
+  const { sessionId } = req.body ?? {};
+  const session = typeof sessionId === 'string' ? onlineSessions.get(sessionId) : null;
+  if (!session) {
+    return res.json({ ok: true, cancelled: false });
+  }
+  session.status = 'expired';
+  return res.json({ ok: true, cancelled: true });
+});
+
+// NFTのERC-1155メタデータ。ウォレット/マーケットプレイスがtokenURI(コントラクトの
+// uri())中の"{id}"を実際のtoken id(64桁の0埋め16進数)に置き換えてfetchしてくる
+// (ERC-1155標準の挙動)ため、末尾の.jsonを外して16進として解釈し、対応する
+// PRIZE_POOLのエントリからその場でJSONを生成する(静的ファイルを個別に用意しない)。
+app.get('/nft-metadata/:idHex', (req, res) => {
+  const idHex = req.params.idHex.replace(/\.json$/i, '');
+  const id = parseInt(idHex, 16);
+  const prize = PRIZE_POOL.find((p) => p.id === id);
+  if (!prize) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  return res.json({
+    name: prize.name,
+    description: 'ICHIGOガチャガチャ オンライン参加記念NFT',
+    image: `${req.protocol}://${req.get('host')}/nft-images/${prize.image}`,
   });
 });
 

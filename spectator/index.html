@@ -37,34 +37,113 @@
   .completed h2 { font-family: 'Shippori Mincho', serif; font-size: 2.4rem; color: var(--gold); margin-bottom: 12px; }
   .completed .priceLine { justify-content: center; }
   .hidden { display: none; }
+
+  /* ==== 音声有効化オーバーレイ ====
+     このページはボタン操作が無い投影専用画面なので、ブラウザの自動再生ブロックを
+     解除できるユーザー操作が無い。設営時にスタッフが1回だけタップしてBGMを
+     開始してもらうための全画面オーバーレイ。 */
+  .soundGate {
+    position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.75);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .soundGateBtn {
+    font-family: 'Zen Maru Gothic', system-ui, sans-serif; font-size: 1.3rem; font-weight: 700;
+    padding: 20px 32px; border-radius: 14px; border: none; background: var(--gold); color: #2b2118; cursor: pointer;
+  }
+
+  /* ==== オンライン参加パネル(2026-07-15追加) ====
+     現地の表示(idleView/activeView/completedView)は一切変更しない。全体を
+     stageLayoutで横に分割し、右側に最大2タイルのオンラインパネルを追加するだけ。
+     オンライン交渉が0件ならパネル自体を隠し、mainStageが自然に全幅へ戻る
+     (「可変な感じ」という要望通り、空タイルを置いたままにはしない)。 */
+  .stageLayout { display: flex; gap: 24px; align-items: flex-start; }
+  .mainStage { flex: 1 1 auto; min-width: 0; }
+  .onlinePanel {
+    flex: 0 1 33%; max-width: 420px; display: flex; flex-direction: column; gap: 12px;
+  }
+  .onlinePanel.hidden { display: none; }
+  .onlinePanelTitle { font-family: 'Shippori Mincho', serif; font-size: 1.1rem; color: var(--gold); margin: 0 0 4px; text-align: center; }
+  .onlineTile {
+    background: rgba(255,255,255,.06); border: 1px solid rgba(224,178,92,.35); border-radius: 12px;
+    padding: 14px; font-size: .95rem;
+  }
+  .onlineTile .onlineTileName { font-weight: 700; color: var(--gold); margin-bottom: 4px; }
+  .onlineTile .onlineTilePrice { color: #eee; }
+  .onlineTile .onlineTileMsg { color: #ccc; font-size: .85rem; margin-top: 6px; white-space: pre-wrap; }
+
+  /* ==== オンライン当選演出(現地のcompletedViewとは別の見た目にして混同を防ぐ) ==== */
+  #revealToast {
+    position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
+    background: #1a1410; border: 3px solid var(--gold); border-radius: 16px;
+    padding: 16px 26px; text-align: center; z-index: 30; box-shadow: 0 6px 24px rgba(0,0,0,.5);
+  }
+  #revealToast.hidden { display: none; }
+  #revealToast .revealTag {
+    display: inline-block; font-size: .75rem; font-weight: 700; color: #2b2118;
+    background: var(--gold); border-radius: 6px; padding: 2px 8px; margin-bottom: 8px;
+  }
+  #revealToast .revealName { font-family: 'Shippori Mincho', serif; font-size: 1.3rem; color: var(--gold); margin: 0 0 4px; }
+  #revealToast .revealPrize { color: #fff8ee; font-size: 1.1rem; }
 </style>
 </head>
 <body>
-  <div id="idleView" class="idle">
-    <img src="assets/ichigoban-greet.png" alt="" class="characterImg">
-    <h2>ICHIGO ガチャガチャ AI店番</h2>
-    <p class="muted">QRコードをスキャンして交渉を始めてください</p>
+  <div id="soundGate" class="soundGate">
+    <button id="soundGateBtn" class="soundGateBtn" type="button">🔈 音声を有効にする(設営時に1回タップ)</button>
   </div>
 
-  <div id="completedView" class="hidden completed">
-    <div class="confettiBg"></div>
-    <img src="assets/ichigoban-thanks.png" alt="" class="characterImg">
-    <h2>ありがとうございました!</h2>
-    <p class="priceLine"><span id="completedNameLabel"></span>さん、<span id="completedPriceLabel"></span> ICHIGO</p>
-    <p class="muted">次の方、お待たせしました</p>
+  <div class="stageLayout">
+    <div class="mainStage">
+      <div id="idleView" class="idle">
+        <img src="assets/ichigoban-greet.png" alt="" class="characterImg">
+        <h2>ICHIGO ガチャガチャ AI店番</h2>
+        <p class="muted">QRコードをスキャンして交渉を始めてください</p>
+      </div>
+
+      <div id="completedView" class="hidden completed">
+        <div class="confettiBg"></div>
+        <img src="assets/ichigoban-thanks.png" alt="" class="characterImg">
+        <h2>ありがとうございました!</h2>
+        <p class="priceLine"><span id="completedNameLabel"></span>さん、<span id="completedPriceLabel"></span> ICHIGO</p>
+        <p class="muted">次の方、お待たせしました</p>
+      </div>
+
+      <div id="activeView" class="hidden">
+        <h1><img src="assets/ichigoban-thinking.png" alt="" class="characterSmall">交渉中(<span id="walletLabel"></span>)</h1>
+        <p class="priceLine">現在の提示価格: <span id="priceLabel"></span> ICHIGO</p>
+        <p class="turnLine" id="turnLine"><span id="turnLabel"></span></p>
+        <div class="chat" id="chat"></div>
+        <p class="manualNotice hidden" id="manualNotice">スタッフと直接交渉中です</p>
+      </div>
+    </div>
+
+    <div id="onlinePanel" class="onlinePanel hidden">
+      <p class="onlinePanelTitle">🌐 オンライン参加中</p>
+      <div id="onlineTiles"></div>
+    </div>
   </div>
 
-  <div id="activeView" class="hidden">
-    <h1><img src="assets/ichigoban-thinking.png" alt="" class="characterSmall">交渉中(<span id="walletLabel"></span>)</h1>
-    <p class="priceLine">現在の提示価格: <span id="priceLabel"></span> ICHIGO</p>
-    <p class="turnLine" id="turnLine"><span id="turnLabel"></span></p>
-    <div class="chat" id="chat"></div>
-    <p class="manualNotice hidden" id="manualNotice">スタッフと直接交渉中です</p>
+  <div id="revealToast" class="hidden">
+    <div class="revealTag">オンライン参加</div>
+    <p class="revealName"><span id="revealName"></span>さんに…</p>
+    <p class="revealPrize"><span id="revealPrizeName"></span> が出ました!</p>
   </div>
 
 <script type="module">
 const POLL_MS = 2000;
 const $ = (id) => document.getElementById(id);
+
+// ==== BGM ====
+// お祭りっぽいループ音源(assets/bgm.mp3)を投影画面側でも流す。設営時にスタッフが
+// オーバーレイをタップするまでは自動再生ブロックで鳴らせないため、その1回のタップを
+// 待ってから開始する。音源が未生成/再生に失敗した場合はcatchで握りつぶし、
+// 投影自体は通常通り動作させる。
+const bgmAudio = new Audio("assets/bgm.mp3");
+bgmAudio.loop = true;
+bgmAudio.volume = 0.3;
+$("soundGateBtn").addEventListener("click", () => {
+  bgmAudio.play().catch(() => {});
+  $("soundGate").classList.add("hidden");
+});
 
 // 「再描画をスキップするか」の判定キー。transcript.lengthだけで判定すると、
 // Aさんの交渉終了直後にBさんが交渉を始め、たまたま会話の往復回数が同じ長さに
@@ -141,6 +220,82 @@ async function poll() {
 
 poll();
 setInterval(poll, POLL_MS);
+
+// ==== オンライン参加パネル・当選演出(2026-07-15追加) ====
+// 現地用のpoll()/renderTranscriptとは意図的に完全に別の関数にしている
+// (「現地用とオンライン用は完全に別物として扱う」という方針、既存のpoll()は無変更)。
+const REVEAL_DISPLAY_MS = 7000; // 1件あたりの当選演出の表示時間
+
+function renderOnlineTiles(sessions) {
+  const panel = $("onlinePanel");
+  if (!sessions.length) {
+    panel.classList.add("hidden");
+    return;
+  }
+  panel.classList.remove("hidden");
+  const container = $("onlineTiles");
+  container.innerHTML = "";
+  for (const s of sessions) {
+    const tile = document.createElement("div");
+    tile.className = "onlineTile";
+    const statusLabel = s.status === "awaiting-payment" ? `${s.price} ICHIGOで確定・支払い待ち`
+      : s.status === "awaiting-claim" ? "NFT受け取り待ち"
+      : `${s.turn}/${s.maxTurn}ターン`;
+    // displayNameはサーバー側でサニタイズ済みだが、lastMessage(参加者のチャット本文)は
+    // 自由文字列なのでinnerHTMLで組み立てず、textContentで個別に設定する(XSS対策)。
+    const nameEl = document.createElement("div");
+    nameEl.className = "onlineTileName";
+    nameEl.textContent = s.displayName;
+    const priceEl = document.createElement("div");
+    priceEl.className = "onlineTilePrice";
+    priceEl.textContent = `${s.price} ICHIGO(${statusLabel})`;
+    const msgEl = document.createElement("div");
+    msgEl.className = "onlineTileMsg";
+    msgEl.textContent = s.lastMessage || "";
+    tile.append(nameEl, priceEl, msgEl);
+    container.appendChild(tile);
+  }
+}
+
+// 当選演出は複数件が同時に来ても1件ずつ順番に見せる(オンラインは同時に複数人が
+// 完了しうるため、現地のcompletedView(手動解除のみ)と同じ「積み上がる」設計にはしない)。
+const shownRevealKeys = new Set();
+const revealQueue = [];
+let revealShowing = false;
+
+function showNextReveal() {
+  if (revealShowing || !revealQueue.length) return;
+  revealShowing = true;
+  const reveal = revealQueue.shift();
+  $("revealName").textContent = reveal.displayName;
+  $("revealPrizeName").textContent = reveal.prize.name;
+  $("revealToast").classList.remove("hidden");
+  setTimeout(() => {
+    $("revealToast").classList.add("hidden");
+    revealShowing = false;
+    showNextReveal();
+  }, REVEAL_DISPLAY_MS);
+}
+
+async function pollOnline() {
+  try {
+    const res = await fetch("/online-negotiate-current");
+    const data = await res.json();
+    renderOnlineTiles(data.sessions || []);
+    for (const reveal of data.reveals || []) {
+      const key = `${reveal.sessionId}:${reveal.revealedAt}`;
+      if (shownRevealKeys.has(key)) continue;
+      shownRevealKeys.add(key);
+      revealQueue.push(reveal);
+    }
+    showNextReveal();
+  } catch {
+    // オンラインパネルの通信エラーは、現地の投影(poll())には影響させない
+  }
+}
+
+pollOnline();
+setInterval(pollOnline, POLL_MS);
 </script>
 </body>
 </html>
