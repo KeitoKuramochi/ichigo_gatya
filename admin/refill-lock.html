@@ -23,8 +23,14 @@
   input[type="number"] { width: 100%; box-sizing: border-box; font-size: 1rem; padding: 6px 8px; border: 1px solid #ccc; border-radius: 8px; margin-top: 8px; }
   #setPriceBtn { background: var(--pink); margin-top: 8px; }
   #dismissCompletedBtn { background: #888; }
+  /* walletアドレス(displayName未入力時のフォールバック)はスペース無しの42文字の
+     連続文字列なので、狭い画面では列幅を無視して伸び、テーブルごと・ページごと
+     横スクロールしてしまう(かつ隣の「解除」列がその分だけ潰れて1文字ずつ縦に
+     折り返る、という別の崩れも誘発する)。テーブルはスクロール可能なラッパーに収め、
+     セル内の長い文字列自体もどこでも折り返せるようにして、両方を防ぐ。 */
+  #purchasesTableWrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: .85rem; }
-  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #eee; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid #eee; overflow-wrap: anywhere; }
   .status-unlocked { color: #1e8449; }
   .status-failed, .status-timeout { color: #c0392b; }
   .status-pending, .status-unknown, .status-dispatched { color: #888; }

@@ -20,7 +20,10 @@
   }
   * { box-sizing: border-box; }
   html { background: var(--paper); }
-  body { font-family: var(--font-body); max-width: 480px; margin: 0 auto; padding: 0 18px 40px; color: var(--ink); background: var(--paper); }
+  body {
+    font-family: var(--font-body); max-width: 480px; margin: 0 auto; padding: 0 18px 40px; color: var(--ink); background: var(--paper);
+    overflow-wrap: break-word; /* ウォレットアドレス等、スペース無しの長い文字列が狭い画面ではみ出さないようにする(negotiate/index.htmlと同じ対策) */
+  }
   h1 { font-family: var(--font-display); font-size: 1.4rem; margin: 20px 0 4px; }
   .headerBanner { display: block; width: calc(100% + 36px); margin: 0 -18px 12px; height: auto; }
   .iconBadge {

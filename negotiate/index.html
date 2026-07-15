@@ -153,6 +153,12 @@
   .priceLine { font-size: 1rem; font-weight: 500; margin: 10px 0; }
   .nameRow { display: flex; gap: 8px; margin: 8px 0; }
   .nameRow input { flex: 1; }
+  /* 日本語は文字間どこでも改行できてしまうため、横幅が狭い画面ではflexの
+     縮小(既定のflex-shrink:1・min-width:auto)でボタンの内容幅が1文字分まで
+     潰れ、ラベルが1文字ずつ縦に折り返ってしまう(結果、隣のinputまで
+     つられて縦長になる)不具合があった。ボタン側を縮ませない・改行させない
+     ことで、狭い分は隣のinput(flex:1)側だけが縮むようにする。 */
+  .nameRow button, .chatInputRow button { flex-shrink: 0; white-space: nowrap; }
 
   /* ==== レシート ==== */
   .receipt { position: relative; border: 2px solid var(--indigo); border-radius: 12px; padding: 18px; margin: 16px 0; background: var(--paper-deep); }
@@ -160,9 +166,20 @@
   .receipt h2 { margin: 0 0 10px; padding-right: 52px; font-size: 1.2rem; color: var(--indigo-deep); }
   .receiptRow { margin: 6px 0; }
   .resolutionButtons { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+
+  /* ==== 音のオン/オフ ==== */
+  .soundToggleBtn {
+    position: fixed; top: 12px; right: 12px; z-index: 20;
+    width: 44px; height: 44px; padding: 0; border-radius: 50%;
+    background: rgba(43,33,24,.55); color: #fff8ee; font-size: 1.3rem;
+    box-shadow: 0 2px 6px rgba(0,0,0,.3);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .soundToggleBtn:active { transform: translateY(1px); box-shadow: 0 1px 3px rgba(0,0,0,.3); }
 </style>
 </head>
 <body>
+  <button id="soundToggleBtn" class="soundToggleBtn" type="button" aria-label="音のオン・オフ切り替え">🔊</button>
   <div class="stallHero">
     <img src="assets/header-banner.png" alt="" class="stallScene">
     <div class="stallShade"></div>
@@ -173,6 +190,8 @@
 
   <div class="page">
     <p class="lead">店番AIと少し話して、値段を決めてから支払います。</p>
+    <p class="muted"><a href="https://ichigo-gatya-web.vercel.app/" target="_blank" rel="noopener" style="color:inherit">🍓 ICHIGOガチャガチャってなに?しくみ・つくった話はこちら</a></p>
+    <!-- TODO: story/(別リポジトリichigo_gatya_web)のVercelデプロイURLが確定したら上記hrefを差し替える -->
 
     <button id="connectBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-wallet.png" alt=""></span>ウォレットを接続</button>
     <p class="muted" id="account"></p>
@@ -238,6 +257,8 @@
         </div>
       </div>
       <p class="receiptRow ok hidden" id="receiptThanks">ICHIGOガチャガチャのご利用、ありがとうございました!</p>
+      <p class="receiptRow muted"><a href="https://ichigo-gatya-web.vercel.app/" target="_blank" rel="noopener" style="color:inherit">🍓 つくった話・裏話はこちら</a></p>
+      <!-- TODO: story/(別リポジトリichigo_gatya_web)のVercelデプロイURLが確定したら上記hrefを差し替える(negotiate上部リンクと同じURL) -->
       <button id="buyAgainBtn" class="secondaryBtn hidden"><span class="iconBadge"><img class="btnIcon" src="assets/icon-buy.png" alt=""></span>もう一度購入する</button>
     </div>
 
@@ -268,6 +289,85 @@ const SESSION_POINTER_TTL_MS = 20 * 60 * 1000; // リロード時に名前入力
 const DISMISSED_RECEIPT_KEY = "ichigo_dismissed_receipt";
 
 const $ = (id) => document.getElementById(id);
+
+// ==== 音(BGM・効果音) ====
+// 「ウォレットを接続」ボタンのクリックという確実なユーザー操作をきっかけに
+// AudioContext・BGMを起動する(ブラウザの自動再生ブロックを避けるため、
+// ユーザー操作の中で同期的に呼ぶ必要がある)。以後はこのページ内で自由に鳴らせる。
+const SOUND_MUTE_KEY = "ichigo_sound_muted";
+let soundMuted = localStorage.getItem(SOUND_MUTE_KEY) === "1";
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
+// ボタンのカチッ・ポンといった短い効果音は、外部の音声ファイルを持たず
+// オシレーターでその場で合成する(生成・管理する音源を増やさずに済むため)。
+function beep({ freq, durationMs, type = "sine", startGain = 0.2, delayMs = 0 }) {
+  if (soundMuted) return;
+  const ctx = getAudioCtx();
+  const t0 = ctx.currentTime + delayMs / 1000;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  gain.gain.setValueAtTime(startGain, t0);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + durationMs / 1000);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + durationMs / 1000 + 0.02);
+}
+function playClickSound() { beep({ freq: 880, durationMs: 90, type: "square", startGain: 0.15 }); }
+function playSendSound() { beep({ freq: 660, durationMs: 110, type: "sine", startGain: 0.18 }); }
+
+// ファンファーレ(交渉成立・支払い成功)は、AI Studio(Lyria)等で生成した音源
+// (assets/sfx/fanfare.mp3)を置けばそれを優先して使う。音源がまだ無い/読み込みに
+// 失敗した場合は、上昇アルペジオの合成音にフォールバックする(音源生成前でも
+// 動作確認できるようにするため)。
+const fanfareAudio = new Audio("assets/sfx/fanfare.mp3");
+fanfareAudio.preload = "auto";
+let fanfareAudioBroken = false;
+fanfareAudio.addEventListener("error", () => { fanfareAudioBroken = true; });
+function playFanfareSynth() {
+  [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => {
+    beep({ freq, durationMs: 220, type: "triangle", startGain: 0.22, delayMs: i * 90 });
+  });
+}
+function playFanfare() {
+  if (soundMuted) return;
+  if (fanfareAudioBroken) { playFanfareSynth(); return; }
+  fanfareAudio.currentTime = 0;
+  fanfareAudio.play().catch(() => playFanfareSynth());
+}
+
+// BGM(お祭りっぽいループ音源)。assets/bgm.mp3を置いて使う想定で、無ければ
+// 再生に失敗するだけで(catchで握りつぶす)ページの動作自体には影響しない。
+const bgmAudio = new Audio("assets/bgm.mp3");
+bgmAudio.loop = true;
+bgmAudio.volume = 0.35;
+let bgmStarted = false;
+function startBgmIfNeeded() {
+  if (bgmStarted || soundMuted) return;
+  bgmStarted = true;
+  bgmAudio.play().catch(() => { bgmStarted = false; }); // 音源未生成・自動再生ブロック時は静かに諦める
+}
+
+function updateSoundToggleUI() {
+  $("soundToggleBtn").textContent = soundMuted ? "🔇" : "🔊";
+}
+$("soundToggleBtn").addEventListener("click", () => {
+  soundMuted = !soundMuted;
+  localStorage.setItem(SOUND_MUTE_KEY, soundMuted ? "1" : "0");
+  updateSoundToggleUI();
+  if (soundMuted) {
+    bgmAudio.pause();
+  } else {
+    getAudioCtx();
+    startBgmIfNeeded();
+  }
+});
+updateSoundToggleUI();
 
 let provider, signer, account, token, decimals = 18n;
 let sessionId = null;
@@ -391,6 +491,7 @@ function stopCharacterIdleAnim() {
 }
 
 function enterPaymentPhase(price) {
+  playFanfare(); // 交渉成立(価格確定・支払い画面への遷移)を効果音でも祝う
   stopManualPoll();
   stopCharacterIdleAnim();
   setCharacterImage("decided");
@@ -661,6 +762,9 @@ function enterReceiptPhase({ wallet, displayName, price, txHash, sessionId }) {
     receipt.unlockStatus = status;
     writeJSON(RECEIPT_STORAGE_KEY, receipt);
     updateReceiptStatusUI(receipt);
+    // 実際に実機の解除が成功した、まさにその瞬間だけファンファーレを鳴らす
+    // (tryRestoreReceipt側では呼ばない = 古いレシートの再表示時に鳴り直さないようにする)。
+    if (status === "unlocked") playFanfare();
   });
 }
 
@@ -865,6 +969,10 @@ async function sendChatMessage(message) {
 }
 
 $("connectBtn").addEventListener("click", async () => {
+  // このクリックが、ブラウザの自動再生ブロックを解除できる確実なユーザー操作。
+  // ここでAudioContextを起動し、カチッ音とBGMを鳴らし始める。
+  playClickSound();
+  startBgmIfNeeded();
   if (!window.ethereum) {
     // QRコードをスマホの標準カメラ/ブラウザ(Safari・Chrome等)で開いた場合、
     // window.ethereumは注入されない(MetaMaskアプリの中のブラウザでしか使えない)。
@@ -940,6 +1048,7 @@ $("sendBtn").addEventListener("click", () => {
   const input = $("chatInput");
   const message = input.value.trim();
   if (!message) return;
+  playSendSound();
   input.value = "";
   sendChatMessage(message);
 });
