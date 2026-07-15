@@ -56,20 +56,34 @@
      stageLayoutで横に分割し、右側に最大2タイルのオンラインパネルを追加するだけ。
      オンライン交渉が0件ならパネル自体を隠し、mainStageが自然に全幅へ戻る
      (「可変な感じ」という要望通り、空タイルを置いたままにはしない)。 */
-  .stageLayout { display: flex; gap: 24px; align-items: flex-start; }
+  .stageLayout { display: flex; gap: 28px; align-items: flex-start; }
   .mainStage { flex: 1 1 auto; min-width: 0; }
+  /* 投影(会場の大画面)で遠くからでも気付ける大きさにする。以前は現地側(activeView)に
+     比べて文字が小さすぎ、「見えない」に近い扱いになっていたための修正(2026-07-16)。 */
   .onlinePanel {
-    flex: 0 1 33%; max-width: 420px; display: flex; flex-direction: column; gap: 12px;
+    flex: 0 1 38%; max-width: 480px; display: flex; flex-direction: column; gap: 16px;
   }
   .onlinePanel.hidden { display: none; }
-  .onlinePanelTitle { font-family: 'Shippori Mincho', serif; font-size: 1.1rem; color: var(--gold); margin: 0 0 4px; text-align: center; }
-  .onlineTile {
-    background: rgba(255,255,255,.06); border: 1px solid rgba(224,178,92,.35); border-radius: 12px;
-    padding: 14px; font-size: .95rem;
+  .onlinePanelTitle {
+    font-family: 'Shippori Mincho', serif; font-size: 1.7rem; color: var(--gold); margin: 0 0 4px; text-align: center;
+    display: flex; align-items: center; justify-content: center; gap: 10px;
   }
-  .onlineTile .onlineTileName { font-weight: 700; color: var(--gold); margin-bottom: 4px; }
-  .onlineTile .onlineTilePrice { color: #eee; }
-  .onlineTile .onlineTileMsg { color: #ccc; font-size: .85rem; margin-top: 6px; white-space: pre-wrap; }
+  .liveDot {
+    width: 14px; height: 14px; border-radius: 50%; background: #ff5b4d;
+    box-shadow: 0 0 0 0 rgba(255,91,77,.6); animation: liveDotPulse 1.6s ease-out infinite;
+  }
+  @keyframes liveDotPulse {
+    0% { box-shadow: 0 0 0 0 rgba(255,91,77,.6); }
+    70% { box-shadow: 0 0 0 10px rgba(255,91,77,0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,91,77,0); }
+  }
+  .onlineTile {
+    background: rgba(255,255,255,.07); border: 2px solid rgba(224,178,92,.5); border-radius: 16px;
+    padding: 18px 20px; font-size: 1.15rem;
+  }
+  .onlineTile .onlineTileName { font-family: 'Shippori Mincho', serif; font-weight: 800; font-size: 1.4rem; color: var(--gold); margin-bottom: 6px; }
+  .onlineTile .onlineTilePrice { color: #fff8ee; font-size: 1.2rem; font-weight: 700; }
+  .onlineTile .onlineTileMsg { color: #ddd; font-size: 1.05rem; margin-top: 10px; line-height: 1.5; white-space: pre-wrap; }
 
   /* ==== オンライン当選演出(現地のcompletedViewとは別の見た目にして混同を防ぐ) ==== */
   #revealToast {
@@ -117,7 +131,7 @@
     </div>
 
     <div id="onlinePanel" class="onlinePanel hidden">
-      <p class="onlinePanelTitle">🌐 オンライン参加中</p>
+      <p class="onlinePanelTitle"><span class="liveDot"></span>🌐 オンライン参加中</p>
       <div id="onlineTiles"></div>
     </div>
   </div>

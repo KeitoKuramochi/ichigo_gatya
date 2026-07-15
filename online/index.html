@@ -29,12 +29,33 @@
     --font-body: 'Zen Maru Gothic', system-ui, sans-serif;
   }
   * { box-sizing: border-box; }
-  html { background: var(--paper); }
+  html { background: var(--indigo-deep); }
   body {
-    font-family: var(--font-body); max-width: 480px; margin: 0 auto; color: var(--ink);
+    font-family: var(--font-body); margin: 0; color: var(--ink);
     overflow-wrap: break-word;
+    min-height: 100vh;
+  }
+  /* ==== レスポンシブな背景配置(2026-07-16追加) ====
+     オンライン参加者はスマホのQR経由ではなくPCで開く人が多いと想定される。
+     スマホ幅ではこれまで通り(スマホ版の見た目そのまま、下のメディアクエリは
+     min-widthなので狭い画面には一切影響しない)。ある程度広い画面(デスクトップ)
+     では、スマホ用の480px幅カードをそのまま伸ばして間延びさせるのではなく、
+     カードを画面中央に据えて、周囲に舞台らしい背景(藍色のグラデーション)を
+     敷く「PC版の配置」にする。 */
+  .appShell {
+    max-width: 480px; margin: 0 auto;
     background: var(--paper) url(assets/paper-texture-tile.jpg);
     background-size: 340px 340px;
+  }
+  @media (min-width: 720px) {
+    body {
+      display: flex; justify-content: center; padding: 48px 20px;
+      background: radial-gradient(circle at 50% -10%, var(--indigo) 0%, var(--indigo-deep) 60%) fixed;
+    }
+    .appShell {
+      border-radius: 22px; overflow: hidden;
+      box-shadow: 0 24px 70px rgba(0,0,0,.5);
+    }
   }
   .page { padding: 0 18px 40px; }
 
@@ -162,6 +183,7 @@
 </style>
 </head>
 <body>
+  <div class="appShell">
   <div class="stallHero">
     <img src="assets/header-banner.png" alt="" class="stallScene">
     <div class="stallShade"></div>
@@ -260,6 +282,7 @@
     </div>
 
     <p id="status"></p>
+  </div>
   </div>
 
 <script type="module">
