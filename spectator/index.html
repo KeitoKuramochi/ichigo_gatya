@@ -46,6 +46,12 @@
     position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,.75);
     display: flex; align-items: center; justify-content: center;
   }
+  /* .hidden(display:none)は.soundGateより前に定義されているため、CSSの記述順の
+     ルールでは.soundGateのdisplay:flexが勝ってしまい、タップしてもクラスは
+     切り替わるのに画面上は消えないという不具合があった(セレクタの詳細度が同じ
+     場合、後に書かれたルールが勝つため)。.soundGate.hiddenとして詳細度を上げ、
+     確実にこちらを優先させる。 */
+  .soundGate.hidden { display: none; }
   .soundGateBtn {
     font-family: 'Zen Maru Gothic', system-ui, sans-serif; font-size: 1.3rem; font-weight: 700;
     padding: 20px 32px; border-radius: 14px; border: none; background: var(--gold); color: #2b2118; cursor: pointer;
