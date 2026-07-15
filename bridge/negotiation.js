@@ -14,8 +14,9 @@
 // 下げてよい」と伝え、AIが出したpriceをそのまま信用する(ただしabsoluteFloor未満・
 // 前回提示額を超える値には呼び出し側でclampする、というガードレールは残す)。
 //
-// 3段階のフォールバック構成(2026-07-15、OpenAI APIキー取得を受けて変更):
-// 第一優先: OpenAI。応答できなかった場合だけ、設定されていればAnthropic(Claude Haiku)に
+// 3段階のフォールバック構成(2026-07-16、Claudeの方が交渉の受け答えが賢い/面白いとの
+// ユーザー判断により、Anthropic(Claude Haiku)を第一優先に変更):
+// 第一優先: Anthropic(Claude Haiku)。応答できなかった場合だけ、設定されていればOpenAIに
 // フォールバックする。それも駄目なら、設定されていればCloudflare Workers AIに
 // フォールバックする。各段は対応するAPIキー(等)が未設定なら単純にスキップし、
 // 全段が使えない/失敗した場合は従来通りnullを返して呼び出し側の詫び文言フォールバックに任せる。
@@ -47,7 +48,7 @@ function buildSystemPrompt({ startingPrice, floorPrice, absoluteFloor, turnCount
     `この交渉は全部でたった${maxTurns}ターンしかありません。じわじわ様子見をしている余裕は無いので、いざ値下げする(=上の最重要ルールに当たらない、実際に値下げに値する発言があった)時は、1ターンにつき少額ずつではなく、その場でまとまった額を思い切って提示してください。`,
     `ただし「思い切って」は「毎回いきなり下限まで飛ぶ」ことではありません。値下げする額は発言の面白さ・説得力の度合いに応じて、その都度あなた自身できりのいい額(例: 50・100・500 ICHIGOなど、値段の規模感に見合った単位)を選んで刻んでください。同じような発言なら同じような額、より気の利いた発言ならより大きな額、というふうに下げ幅に緩急をつけるのが、屋台の値切り交渉として面白いところです。`,
     `客が挨拶・雑談・お礼・自己紹介など、値引きそのものの要求ではない形で愛想よく会話を続けている場合は、${floorPrice} ICHIGOに向けて少額を刻んで値下げしてかまいません。毎回必ず下げる必要はありませんが、何ターンも同じ金額のまま据え置き続けるのは避けてください。`,
-    `一方、次のどちらかに当てはまる発言があった場合は、様子見せず、その場のまとまった額を遠慮なく値下げしてよい(ターン数が少ないので、初手であってもためらわないでください): (1)本当に機転が利いた冗談・鋭い切り返し・説得力のあるロールプレイ、(2)この講義(web3/AI概論)の内容にゆるくでも触れている発言。上で説明した「刻んで下げる」考え方はここでも同じです。よほど飛び切り面白い・完璧に授業内容を使いこなした一言でない限り、いきなり${absoluteFloor} ICHIGOまで一直線に下げる必要はありません。${absoluteFloor} ICHIGOは「よほど良ければ到達できる、最後の切り札」の位置づけとして扱ってください。`,
+    `一方、次のどれかに当てはまる発言があった場合は、様子見せず、その場のまとまった額を遠慮なく値下げしてよい(ターン数が少ないので、初手であってもためらわないでください): (1)本当に機転が利いた冗談・鋭い切り返し・説得力のあるロールプレイ、(2)この講義(web3/AI概論)の内容にゆるくでも触れている発言、(3)「他の屋台はもっと安かったよ」のような、値切り交渉らしい現実的な駆け引き・かけあい、(4)あなた(店番)への気の利いたお世辞・褒め言葉・ちょっとした贈り物の申し出(お菓子・食べ物をあげる等)のような、ユーモアのある人間らしい掛け合い。上で説明した「刻んで下げる」考え方はここでも同じです。よほど飛び切り面白い・完璧に授業内容を使いこなした一言でない限り、いきなり${absoluteFloor} ICHIGOまで一直線に下げる必要はありません。${absoluteFloor} ICHIGOは「よほど良ければ到達できる、最後の切り札」の位置づけとして扱ってください。`,
     `(2)の判定の参考として、例えばこんな言葉・話題が出てきたら講義内容に触れているとみなしてよい(意味が多少不正確でも、それらしく使っていれば十分): ${COURSE_TOPIC_HINTS.join('、')}。`,
     'こうした言葉を知らない客の方が多いはずなので、知らない客に対しては無理にヒントを聞き出そうとせず、いつも通り気さくな値切り交渉として自然に応対してください(知識が無いこと自体を責めたり急かしたりしない)。',
     'あなたがpriceとして出す数値が、そのままお客さんへの最終的な請求額になります。reply内で口にする金額とpriceの値は必ず一致させてください。',
@@ -81,7 +82,7 @@ function normalizeQuoteInput(input) {
   return { reply: input.reply, price: input.price, done: input.done };
 }
 
-// 第一優先。OpenAIのfunction callingはCloudflare Workers AIと同じ形式
+// 第二優先(フォールバック)。OpenAIのfunction callingはCloudflare Workers AIと同じ形式
 // (tool_calls[].function.argumentsがJSON文字列)なので、JSON.parseが必要。
 async function callOpenAI({ transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName, apiKey, model }) {
   const controller = new AbortController();
@@ -153,7 +154,7 @@ async function callOpenAI({ transcript, startingPrice, floorPrice, absoluteFloor
   }
 }
 
-// 第二優先(フォールバック)。
+// 第一優先。
 async function callAnthropic({ transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName, apiKey, model }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -291,30 +292,30 @@ export async function getNegotiationReply({
   turnCount, // このメッセージ交換が何ターン目か(0始まり)
   maxTurns,
   displayName, // 客が自由入力したニックネーム。無ければnull/undefined
-  openaiApiKey, // 第一優先。未設定ならスキップして第二優先(Anthropic)へ
-  openaiModel,
-  anthropicApiKey, // 第二優先(フォールバック)。未設定ならスキップして第三優先(Cloudflare)へ
+  anthropicApiKey, // 第一優先。未設定ならスキップして第二優先(OpenAI)へ
   anthropicModel,
+  openaiApiKey, // 第二優先(フォールバック)。未設定ならスキップして第三優先(Cloudflare)へ
+  openaiModel,
   cloudflareAccountId, // 第三優先(最終フォールバック)
   cloudflareApiToken,
   cloudflareModel,
 }) {
-  if (openaiApiKey) {
-    const viaOpenAI = await callOpenAI({
-      transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName,
-      apiKey: openaiApiKey, model: openaiModel,
-    });
-    if (viaOpenAI) return viaOpenAI;
-    console.warn('OpenAI APIが失敗したため、Anthropic(Claude Haiku)にフォールバックします');
-  }
-
   if (anthropicApiKey) {
     const viaAnthropic = await callAnthropic({
       transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName,
       apiKey: anthropicApiKey, model: anthropicModel,
     });
     if (viaAnthropic) return viaAnthropic;
-    console.warn('Anthropic APIが失敗したため、Cloudflare Workers AIにフォールバックします');
+    console.warn('Anthropic(Claude Haiku) APIが失敗したため、OpenAIにフォールバックします');
+  }
+
+  if (openaiApiKey) {
+    const viaOpenAI = await callOpenAI({
+      transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName,
+      apiKey: openaiApiKey, model: openaiModel,
+    });
+    if (viaOpenAI) return viaOpenAI;
+    console.warn('OpenAI APIが失敗したため、Cloudflare Workers AIにフォールバックします');
   }
 
   if (cloudflareAccountId && cloudflareApiToken) {

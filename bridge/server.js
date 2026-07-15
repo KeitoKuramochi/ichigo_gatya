@@ -109,14 +109,14 @@ for (const [name, value] of Object.entries({ RPC_URL, TOKEN_ADDR, GAME_WALLET, C
 // 登録する。未設定の環境(開発機・APIキー未取得時など)では今までの起動シーケンス・
 // 挙動を一切変えない(fail closedではなくfeature-optional、という設計)。
 const {
-  // 第一優先。未設定ならスキップして第二優先(Anthropic)に進む。
-  OPENAI_API_KEY,
-  OPENAI_MODEL = 'gpt-4o-mini',
-  // 第二優先(フォールバック)。OpenAIが障害・タイムアウト等で応答できなかった場合、
-  // または未設定の場合に使う。
+  // 第一優先。未設定ならスキップして第二優先(OpenAI)に進む。
   ANTHROPIC_API_KEY,
   ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001',
-  // 第三優先(最終フォールバック)。OpenAI・Anthropicのどちらも駄目だった場合に使う。
+  // 第二優先(フォールバック)。Anthropicが障害・タイムアウト等で応答できなかった場合、
+  // または未設定の場合に使う。
+  OPENAI_API_KEY,
+  OPENAI_MODEL = 'gpt-4o-mini',
+  // 第三優先(最終フォールバック)。Anthropic・OpenAIのどちらも駄目だった場合に使う。
   CLOUDFLARE_ACCOUNT_ID,
   CLOUDFLARE_API_TOKEN,
   CLOUDFLARE_MODEL = '@cf/meta/llama-3.1-8b-instruct',
@@ -169,8 +169,8 @@ console.log(
   // /negotiate/自体は常に使える(AIが無ければスタッフが直接価格を決めるmanualモードに
   // なるだけ)。ここで有効/無効と表示しているのは「AIによる自動値切り」の部分だけ。
   NEGOTIATION_ENABLED
-    ? `AI店番エージェント(値切り交渉)機能: 有効(通常フロア=${NEGOTIATE_FLOOR_COST_NUM} ICHIGO, 会話の質次第で最大${NEGOTIATE_ABSOLUTE_FLOOR_NUM} ICHIGOまで, 最大${NEGOTIATE_MAX_TURNS_NUM}ターン, フォールバック順=OpenAI(${OPENAI_API_KEY ? '有効' : '無効'})→Anthropic(${ANTHROPIC_API_KEY ? '有効' : '無効'})→Cloudflare(${(CLOUDFLARE_ACCOUNT_ID && CLOUDFLARE_API_TOKEN) ? '有効' : '無効'}))`
-    : 'AI店番エージェント(値切り交渉)機能: 無効(OPENAI_API_KEY / ANTHROPIC_API_KEY / CLOUDFLARE_ACCOUNT_ID+CLOUDFLARE_API_TOKENのいずれも、またはNEGOTIATE_FLOOR_COSTが未設定) → /negotiate/はスタッフが価格を直接決めるmanualモードで動作します'
+    ? `AI店番エージェント(値切り交渉)機能: 有効(通常フロア=${NEGOTIATE_FLOOR_COST_NUM} ICHIGO, 会話の質次第で最大${NEGOTIATE_ABSOLUTE_FLOOR_NUM} ICHIGOまで, 最大${NEGOTIATE_MAX_TURNS_NUM}ターン, フォールバック順=Anthropic(${ANTHROPIC_API_KEY ? '有効' : '無効'})→OpenAI(${OPENAI_API_KEY ? '有効' : '無効'})→Cloudflare(${(CLOUDFLARE_ACCOUNT_ID && CLOUDFLARE_API_TOKEN) ? '有効' : '無効'}))`
+    : 'AI店番エージェント(値切り交渉)機能: 無効(ANTHROPIC_API_KEY / OPENAI_API_KEY / CLOUDFLARE_ACCOUNT_ID+CLOUDFLARE_API_TOKENのいずれも、またはNEGOTIATE_FLOOR_COSTが未設定) → /negotiate/はスタッフが価格を直接決めるmanualモードで動作します'
 );
 
 console.log(
@@ -348,7 +348,7 @@ let lastCompleted = null; // {displayName, wallet(masked), price, completedAt, t
 // RECENT_PURCHASES_MAXを超えたら末尾を捨てる(ディスク永続化はしない、教室内デモ相応)。
 const recentPurchases = [];
 
-// AI(OpenAI→Anthropic→Cloudflareの3段階フォールバック)が連続で失敗した回数。成功したら0に戻す。
+// AI(Anthropic→OpenAI→Cloudflareの3段階フォールバック)が連続で失敗した回数。成功したら0に戻す。
 // スタッフがAI障害に気付かず参加者を待たせ続ける事故を防ぐため、管理者ページに表示する。
 let consecutiveAiFailures = 0;
 
