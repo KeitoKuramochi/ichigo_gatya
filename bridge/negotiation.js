@@ -14,12 +14,14 @@
 // 下げてよい」と伝え、AIが出したpriceをそのまま信用する(ただしabsoluteFloor未満・
 // 前回提示額を超える値には呼び出し側でclampする、というガードレールは残す)。
 //
-// メインはAnthropic(Claude)。Anthropic側が障害・タイムアウト等で応答できなかった
-// 場合だけ、設定されていればGoogle Geminiにフォールバックする(GEMINI_API_KEY未設定
-// なら単純にスキップし、従来通りnullを返して呼び出し側の詫び文言フォールバックに任せる)。
+// 3段階のフォールバック構成(2026-07-15、OpenAI APIキー取得を受けて変更):
+// 第一優先: OpenAI。応答できなかった場合だけ、設定されていればAnthropic(Claude Haiku)に
+// フォールバックする。それも駄目なら、設定されていればCloudflare Workers AIに
+// フォールバックする。各段は対応するAPIキー(等)が未設定なら単純にスキップし、
+// 全段が使えない/失敗した場合は従来通りnullを返して呼び出し側の詫び文言フォールバックに任せる。
 
+const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
-const GEMINI_API_URL_TEMPLATE = 'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent';
 const CLOUDFLARE_API_URL_TEMPLATE = 'https://api.cloudflare.com/client/v4/accounts/{accountId}/ai/run/{model}';
 const REQUEST_TIMEOUT_MS = 15 * 1000;
 
@@ -50,8 +52,8 @@ function buildSystemPrompt({ startingPrice, floorPrice, absoluteFloor, turnCount
   ].filter(Boolean).join('\n');
 }
 
-// Anthropic/Gemini共通: quoteツールの入力(パース済みオブジェクト)が期待した形式かを
-// 検証し、{reply, price, done}に正規化する。不正なら null。
+// OpenAI/Anthropic/Cloudflare共通: quoteツール(function)の入力(パース済みオブジェクト)が
+// 期待した形式かを検証し、{reply, price, done}に正規化する。不正なら null。
 function normalizeQuoteInput(input) {
   if (
     !input ||
@@ -64,6 +66,79 @@ function normalizeQuoteInput(input) {
   return { reply: input.reply, price: input.price, done: input.done };
 }
 
+// 第一優先。OpenAIのfunction callingはCloudflare Workers AIと同じ形式
+// (tool_calls[].function.argumentsがJSON文字列)なので、JSON.parseが必要。
+async function callOpenAI({ transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName, apiKey, model }) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+
+  try {
+    const res = await fetch(OPENAI_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 300,
+        messages: [
+          { role: 'system', content: buildSystemPrompt({ startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName }) },
+          ...transcript.map((m) => ({ role: m.role, content: m.content })),
+        ],
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'quote',
+            description: '店番としての返答・今回提示する価格を記録する',
+            parameters: {
+              type: 'object',
+              properties: {
+                reply: { type: 'string', description: '客への返答本文(日本語)' },
+                price: { type: 'number', description: '今回提示する価格(ICHIGO)。replyで口にする金額と必ず一致させる' },
+                done: { type: 'boolean', description: 'この価格で交渉を終了してよいか' },
+              },
+              required: ['reply', 'price', 'done'],
+            },
+          },
+        }],
+        // 必ずquote関数を1回呼び出させる(Anthropicのtool_choiceに相当)。
+        tool_choice: { type: 'function', function: { name: 'quote' } },
+      }),
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      console.error(`OpenAI APIエラー: ${res.status} ${await res.text().catch(() => '')}`);
+      return null;
+    }
+
+    const data = await res.json();
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    let args = null;
+    if (toolCall) {
+      try {
+        args = typeof toolCall.function.arguments === 'string'
+          ? JSON.parse(toolCall.function.arguments)
+          : toolCall.function.arguments;
+      } catch {
+        args = null;
+      }
+    }
+    const normalized = normalizeQuoteInput(args);
+    if (!normalized) {
+      console.error('OpenAI APIの応答が期待した形式ではありません:', JSON.stringify(data).slice(0, 500));
+    }
+    return normalized;
+  } catch (err) {
+    console.error('OpenAI API呼び出し中にエラー:', err.message || err);
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// 第二優先(フォールバック)。
 async function callAnthropic({ transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName, apiKey, model }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -119,77 +194,8 @@ async function callAnthropic({ transcript, startingPrice, floorPrice, absoluteFl
   }
 }
 
-async function callGemini({ transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName, apiKey, model }) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  const url = GEMINI_API_URL_TEMPLATE.replace('{model}', model);
-
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-goog-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        systemInstruction: {
-          parts: [{ text: buildSystemPrompt({ startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName }) }],
-        },
-        // Geminiのロール名はuser/model(Anthropicのuser/assistantとは異なる)なので変換する。
-        contents: transcript.map((m) => ({
-          role: m.role === 'assistant' ? 'model' : 'user',
-          parts: [{ text: m.content }],
-        })),
-        tools: [{
-          functionDeclarations: [{
-            name: 'quote',
-            description: '店番としての返答・今回提示する価格を記録する',
-            parameters: {
-              type: 'OBJECT',
-              properties: {
-                reply: { type: 'STRING', description: '客への返答本文(日本語)' },
-                price: { type: 'NUMBER', description: '今回提示する価格(ICHIGO)。replyで口にする金額と必ず一致させる' },
-                done: { type: 'BOOLEAN', description: 'この価格で交渉を終了してよいか' },
-              },
-              required: ['reply', 'price', 'done'],
-            },
-          }],
-        }],
-        // mode:"ANY"で、必ずquote関数を1回呼び出させる(Anthropicのtool_choiceに相当)。
-        toolConfig: {
-          functionCallingConfig: { mode: 'ANY', allowedFunctionNames: ['quote'] },
-        },
-      }),
-      signal: controller.signal,
-    });
-
-    if (!res.ok) {
-      console.error(`Gemini APIエラー: ${res.status} ${await res.text().catch(() => '')}`);
-      return null;
-    }
-
-    const data = await res.json();
-    const parts = data.candidates?.[0]?.content?.parts ?? [];
-    const functionCall = parts.find((p) => p.functionCall?.name === 'quote')?.functionCall;
-    const normalized = normalizeQuoteInput(functionCall?.args);
-    if (!normalized) {
-      console.error('Gemini APIの応答が期待した形式ではありません:', JSON.stringify(data).slice(0, 500));
-    }
-    return normalized;
-  } catch (err) {
-    console.error('Gemini API呼び出し中にエラー:', err.message || err);
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-// テスト専用: Cloudflare Workers AI(無料枠1日1万ニューロン)で交渉を進める。
-// 本番のAnthropic/Geminiの利用枠・課金を一切消費せずに動作確認したい時に使う
-// (呼び出し側でCF_ACCOUNT_ID/CF_API_TOKENが設定されている場合だけ、Anthropic/Geminiより
-// 先にこちらだけを使い、Anthropic/Geminiには一切問い合わせない)。
-// Workers AIのfunction callingはOpenAI形式(tool_calls[].function.argumentsがJSON文字列)
-// なので、Anthropic/Geminiと違ってここだけJSON.parseが必要。
+// 第三優先(最終フォールバック)。Workers AIのfunction callingはOpenAIと同じ形式
+// (tool_calls[].function.argumentsがJSON文字列)なので、Anthropicと違いJSON.parseが必要。
 async function callCloudflareWorkersAI({ transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName, accountId, apiToken, model }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -259,9 +265,9 @@ async function callCloudflareWorkersAI({ transcript, startingPrice, floorPrice, 
   }
 }
 
-// 戻り値: 成功時 {reply, price, done}、両方の呼び出しが失敗(タイムアウト・API障害・
-// 想定外の応答形式)した場合はnull。nullの場合の扱い(価格を変えずに定型の詫び文言を出す等)は
-// 呼び出し側の責務。
+// 戻り値: 成功時 {reply, price, done}、3段階すべての呼び出しが失敗(未設定・タイムアウト・
+// API障害・想定外の応答形式)した場合はnull。nullの場合の扱い(価格を変えずに定型の詫び文言を
+// 出す等)は呼び出し側の責務。
 export async function getNegotiationReply({
   transcript, // [{role:'user'|'assistant', content:string}, ...] これまでの全履歴(サーバー側の正本)
   startingPrice,
@@ -270,17 +276,32 @@ export async function getNegotiationReply({
   turnCount, // このメッセージ交換が何ターン目か(0始まり)
   maxTurns,
   displayName, // 客が自由入力したニックネーム。無ければnull/undefined
-  apiKey, // Anthropic APIキー(メイン)
-  model, // Anthropicモデル
-  geminiApiKey, // 未設定ならGeminiフォールバックはスキップ
-  geminiModel,
-  cloudflareAccountId, // テスト専用。設定されている場合はAnthropic/Geminiより先に使う
+  openaiApiKey, // 第一優先。未設定ならスキップして第二優先(Anthropic)へ
+  openaiModel,
+  anthropicApiKey, // 第二優先(フォールバック)。未設定ならスキップして第三優先(Cloudflare)へ
+  anthropicModel,
+  cloudflareAccountId, // 第三優先(最終フォールバック)
   cloudflareApiToken,
   cloudflareModel,
 }) {
-  // テスト専用の切り替え: Cloudflare Workers AIの認証情報が両方設定されていれば、
-  // Anthropic/Geminiには一切問い合わせずこちらだけを使う(本番の利用枠を守るため)。
-  // 本番(Render)側にはCF_ACCOUNT_ID/CF_API_TOKENを設定しないこと。
+  if (openaiApiKey) {
+    const viaOpenAI = await callOpenAI({
+      transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName,
+      apiKey: openaiApiKey, model: openaiModel,
+    });
+    if (viaOpenAI) return viaOpenAI;
+    console.warn('OpenAI APIが失敗したため、Anthropic(Claude Haiku)にフォールバックします');
+  }
+
+  if (anthropicApiKey) {
+    const viaAnthropic = await callAnthropic({
+      transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName,
+      apiKey: anthropicApiKey, model: anthropicModel,
+    });
+    if (viaAnthropic) return viaAnthropic;
+    console.warn('Anthropic APIが失敗したため、Cloudflare Workers AIにフォールバックします');
+  }
+
   if (cloudflareAccountId && cloudflareApiToken) {
     return callCloudflareWorkersAI({
       transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName,
@@ -288,11 +309,5 @@ export async function getNegotiationReply({
     });
   }
 
-  const primary = await callAnthropic({ transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName, apiKey, model });
-  if (primary) return primary;
-
-  if (!geminiApiKey) return null;
-
-  console.warn('Anthropic APIが失敗したため、Geminiにフォールバックします');
-  return callGemini({ transcript, startingPrice, floorPrice, absoluteFloor, turnCount, maxTurns, displayName, apiKey: geminiApiKey, model: geminiModel });
+  return null;
 }

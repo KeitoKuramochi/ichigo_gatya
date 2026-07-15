@@ -109,15 +109,14 @@ for (const [name, value] of Object.entries({ RPC_URL, TOKEN_ADDR, GAME_WALLET, C
 // 登録する。未設定の環境(開発機・APIキー未取得時など)では今までの起動シーケンス・
 // 挙動を一切変えない(fail closedではなくfeature-optional、という設計)。
 const {
+  // 第一優先。未設定ならスキップして第二優先(Anthropic)に進む。
+  OPENAI_API_KEY,
+  OPENAI_MODEL = 'gpt-4o-mini',
+  // 第二優先(フォールバック)。OpenAIが障害・タイムアウト等で応答できなかった場合、
+  // または未設定の場合に使う。
   ANTHROPIC_API_KEY,
   ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001',
-  // Anthropicが障害・タイムアウト等で応答できなかった場合だけのフォールバック先。
-  // 未設定ならフォールバックせず、従来通り(詫び文言・ターン非消費)にとどまる。
-  GEMINI_API_KEY,
-  GEMINI_MODEL = 'gemini-2.0-flash',
-  // テスト専用: 両方設定されている場合、Anthropic/Geminiには一切問い合わせず
-  // Cloudflare Workers AI(無料枠1日1万ニューロン)だけを使う。本番の利用枠・課金を
-  // 消費せずに動作確認したい時のためのもので、Render(本番)には設定しないこと。
+  // 第三優先(最終フォールバック)。OpenAI・Anthropicのどちらも駄目だった場合に使う。
   CF_ACCOUNT_ID,
   CF_API_TOKEN,
   CF_MODEL = '@cf/meta/llama-3.1-8b-instruct',
@@ -127,7 +126,11 @@ const {
   NEGOTIATE_QUOTE_TTL_MS = String(10 * 60 * 1000),
 } = process.env;
 
-const NEGOTIATION_ENABLED = Boolean(ANTHROPIC_API_KEY && NEGOTIATE_FLOOR_COST);
+// OpenAI/Anthropic/Cloudflareのいずれか1つでもキーが揃っていれば、AI店番機能自体は
+// 有効にする(3段階フォールバックのうちどれが実際に使われるかはgetNegotiationReply側の責務)。
+const NEGOTIATION_ENABLED = Boolean(
+  (OPENAI_API_KEY || ANTHROPIC_API_KEY || (CF_ACCOUNT_ID && CF_API_TOKEN)) && NEGOTIATE_FLOOR_COST
+);
 const NEGOTIATE_MAX_TURNS_NUM = parseInt(NEGOTIATE_MAX_TURNS, 10);
 const NEGOTIATE_ABSOLUTE_FLOOR_NUM = parseFloat(NEGOTIATE_ABSOLUTE_FLOOR);
 const NEGOTIATE_QUOTE_TTL_MS_NUM = parseInt(NEGOTIATE_QUOTE_TTL_MS, 10);
@@ -173,14 +176,9 @@ console.log(
   // /negotiate/自体は常に使える(AIが無ければスタッフが直接価格を決めるmanualモードに
   // なるだけ)。ここで有効/無効と表示しているのは「AIによる自動値切り」の部分だけ。
   NEGOTIATION_ENABLED
-    ? `AI店番エージェント(値切り交渉)機能: 有効(通常フロア=${NEGOTIATE_FLOOR_COST_NUM} ICHIGO, 会話の質次第で最大${NEGOTIATE_ABSOLUTE_FLOOR_NUM} ICHIGOまで, 最大${NEGOTIATE_MAX_TURNS_NUM}ターン, Geminiフォールバック=${GEMINI_API_KEY ? '有効' : '無効'})`
-    : 'AI店番エージェント(値切り交渉)機能: 無効(ANTHROPIC_API_KEY / NEGOTIATE_FLOOR_COSTが未設定) → /negotiate/はスタッフが価格を直接決めるmanualモードで動作します'
+    ? `AI店番エージェント(値切り交渉)機能: 有効(通常フロア=${NEGOTIATE_FLOOR_COST_NUM} ICHIGO, 会話の質次第で最大${NEGOTIATE_ABSOLUTE_FLOOR_NUM} ICHIGOまで, 最大${NEGOTIATE_MAX_TURNS_NUM}ターン, フォールバック順=OpenAI(${OPENAI_API_KEY ? '有効' : '無効'})→Anthropic(${ANTHROPIC_API_KEY ? '有効' : '無効'})→Cloudflare(${(CF_ACCOUNT_ID && CF_API_TOKEN) ? '有効' : '無効'}))`
+    : 'AI店番エージェント(値切り交渉)機能: 無効(OPENAI_API_KEY / ANTHROPIC_API_KEY / CF_ACCOUNT_ID+CF_API_TOKENのいずれも、またはNEGOTIATE_FLOOR_COSTが未設定) → /negotiate/はスタッフが価格を直接決めるmanualモードで動作します'
 );
-if (CF_ACCOUNT_ID && CF_API_TOKEN) {
-  console.warn(
-    `⚠️ テスト用切り替えが有効: 交渉はAnthropic/Geminiではなく Cloudflare Workers AI(${CF_MODEL}) を使います。本番運用時はCF_ACCOUNT_ID/CF_API_TOKENを未設定にしてください。`
-  );
-}
 
 console.log(
   ONLINE_ENABLED
@@ -373,7 +371,7 @@ let lastCompleted = null; // {displayName, wallet(masked), price, completedAt, t
 // RECENT_PURCHASES_MAXを超えたら末尾を捨てる(ディスク永続化はしない、教室内デモ相応)。
 const recentPurchases = [];
 
-// AI(Anthropic→Geminiフォールバック)が連続で失敗した回数。成功したら0に戻す。
+// AI(OpenAI→Anthropic→Cloudflareの3段階フォールバック)が連続で失敗した回数。成功したら0に戻す。
 // スタッフがAI障害に気付かず参加者を待たせ続ける事故を防ぐため、管理者ページに表示する。
 let consecutiveAiFailures = 0;
 
@@ -777,10 +775,10 @@ app.post('/negotiate-message', async (req, res) => {
       turnCount: session.turnCount,
       maxTurns: NEGOTIATE_MAX_TURNS_NUM,
       displayName: session.displayName,
-      apiKey: ANTHROPIC_API_KEY,
-      model: ANTHROPIC_MODEL,
-      geminiApiKey: GEMINI_API_KEY,
-      geminiModel: GEMINI_MODEL,
+      openaiApiKey: OPENAI_API_KEY,
+      openaiModel: OPENAI_MODEL,
+      anthropicApiKey: ANTHROPIC_API_KEY,
+      anthropicModel: ANTHROPIC_MODEL,
       cloudflareAccountId: CF_ACCOUNT_ID,
       cloudflareApiToken: CF_API_TOKEN,
       cloudflareModel: CF_MODEL,
@@ -1187,10 +1185,10 @@ app.post('/online-negotiate-message', async (req, res) => {
       turnCount: session.turnCount,
       maxTurns: NEGOTIATE_MAX_TURNS_NUM,
       displayName: session.displayName,
-      apiKey: ANTHROPIC_API_KEY,
-      model: ANTHROPIC_MODEL,
-      geminiApiKey: GEMINI_API_KEY,
-      geminiModel: GEMINI_MODEL,
+      openaiApiKey: OPENAI_API_KEY,
+      openaiModel: OPENAI_MODEL,
+      anthropicApiKey: ANTHROPIC_API_KEY,
+      anthropicModel: ANTHROPIC_MODEL,
       cloudflareAccountId: CF_ACCOUNT_ID,
       cloudflareApiToken: CF_API_TOKEN,
       cloudflareModel: CF_MODEL,

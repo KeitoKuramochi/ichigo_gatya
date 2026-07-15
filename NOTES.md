@@ -522,3 +522,14 @@ AIが最終ターンで「これ以上の値下げはないから、この値段
 - **`ONLINE_MINTER_PRIVATE_KEY`の鍵管理**: 資金は保有しないが、漏洩すると無期限に不正mintされ得る。会期後も有効であり続けるため、`/test-move`等の「学祭デモだから直さない」という緩い基準とは別に扱うべき(必要なら`setTrustedMinter()`で鍵をローテーションできる)。
 - **参加者側のOptimismガス代**: mint(claim)は参加者自身のウォレットが実行するため、少額のETHが必要(ユーザー確認: 今回は問題にならない前提)。
 - ローカルの動作確認は`GACHA_NFT_MOCK_MODE=1`+ダミーの`ANTHROPIC_API_KEY`で行い、同時2セッションの受付・3セッション目の429・`/online-negotiate-current`のセッション一覧・`/online-negotiate-admin-list`/`-cancel`・`/nft-metadata/:idHex`をcurlで確認済み。**実際のANTHROPIC_API_KEY・実際のICHIGO送金・実際のコントラクトへのclaim()を伴うE2Eは未実施**(本番前に必ず一度、少額の実送金と実mintで通しテストすること)。
+
+## AI店番のフォールバック順を3段階(OpenAI→Anthropic→Cloudflare)に変更(2026-07-15)
+
+OpenAIのAPIキーを取得したとのことで、`bridge/negotiation.js`のAI呼び出し順を変更。以前は「Anthropicメイン→(設定されていれば)Geminiフォールバック」+「CF_ACCOUNT_ID/CF_API_TOKENが両方設定されていればテスト用にAnthropic/Geminiを完全にバイパスしてCloudflare Workers AIだけを使う」という構成だったが、これをやめて**「OpenAI→Anthropic(Claude Haiku)→Cloudflare Workers AI」の3段階本番フォールバックチェーン**に一本化した。
+
+- `getNegotiationReply()`: 各段は対応する環境変数(`OPENAI_API_KEY`→`ANTHROPIC_API_KEY`→`CF_ACCOUNT_ID`+`CF_API_TOKEN`)が設定されていれば呼び出し、失敗(APIエラー・タイムアウト・想定外の応答形式)したら次の段に進む。未設定の段は単純にスキップする。全段失敗/未設定ならnullを返し、呼び出し側(server.js)が従来通りの詫び文言フォールバックを出す。
+- 新規`callOpenAI()`を追加(Chat Completions API、`tool_choice`で`quote`関数呼び出しを強制。レスポンス形式はCloudflare Workers AIと同じ`tool_calls[].function.arguments`のJSON文字列なので、パース処理はCloudflare側と共通のロジックを流用)。
+- `callGemini()`は削除(今回の3段階には含まれないため)。
+- `ANTHROPIC_MODEL`は既存のデフォルト値(`claude-haiku-4-5-20251001`、実質Haiku)をそのまま「第二優先」として使う設計にした。
+- `server.js`: `OPENAI_API_KEY`/`OPENAI_MODEL`(デフォルト`gpt-4o-mini`)を追加、`GEMINI_API_KEY`/`GEMINI_MODEL`を削除。`NEGOTIATION_ENABLED`は「OpenAI/Anthropic/Cloudflareのいずれか1つでもキーが揃っていればtrue」に変更(以前は`ANTHROPIC_API_KEY`必須だった)。起動時ログもフォールバック順の有効/無効状況を表示するよう変更。`bridge/.env.example`も同様に更新。
+- 動作確認: `global.fetch`をモックした一時スクリプトで、(1)OpenAI失敗→Anthropic成功、(2)OpenAI・Anthropic両方失敗→Cloudflare成功、(3)Anthropicのみ設定時に単独で成功、(4)何も設定されていない場合にnullを返す、(5)OpenAIが最初から成功する場合は他の2段に一切問い合わせない、の5パターンをすべて確認済み(実際のAPIキーでのE2Eは未実施)。
