@@ -117,9 +117,9 @@ const {
   ANTHROPIC_API_KEY,
   ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001',
   // 第三優先(最終フォールバック)。OpenAI・Anthropicのどちらも駄目だった場合に使う。
-  CF_ACCOUNT_ID,
-  CF_API_TOKEN,
-  CF_MODEL = '@cf/meta/llama-3.1-8b-instruct',
+  CLOUDFLARE_ACCOUNT_ID,
+  CLOUDFLARE_API_TOKEN,
+  CLOUDFLARE_MODEL = '@cf/meta/llama-3.1-8b-instruct',
   NEGOTIATE_FLOOR_COST,
   NEGOTIATE_ABSOLUTE_FLOOR = '0',
   NEGOTIATE_MAX_TURNS = '4',
@@ -129,7 +129,7 @@ const {
 // OpenAI/Anthropic/Cloudflareのいずれか1つでもキーが揃っていれば、AI店番機能自体は
 // 有効にする(3段階フォールバックのうちどれが実際に使われるかはgetNegotiationReply側の責務)。
 const NEGOTIATION_ENABLED = Boolean(
-  (OPENAI_API_KEY || ANTHROPIC_API_KEY || (CF_ACCOUNT_ID && CF_API_TOKEN)) && NEGOTIATE_FLOOR_COST
+  (OPENAI_API_KEY || ANTHROPIC_API_KEY || (CLOUDFLARE_ACCOUNT_ID && CLOUDFLARE_API_TOKEN)) && NEGOTIATE_FLOOR_COST
 );
 const NEGOTIATE_MAX_TURNS_NUM = parseInt(NEGOTIATE_MAX_TURNS, 10);
 const NEGOTIATE_ABSOLUTE_FLOOR_NUM = parseFloat(NEGOTIATE_ABSOLUTE_FLOOR);
@@ -176,8 +176,8 @@ console.log(
   // /negotiate/自体は常に使える(AIが無ければスタッフが直接価格を決めるmanualモードに
   // なるだけ)。ここで有効/無効と表示しているのは「AIによる自動値切り」の部分だけ。
   NEGOTIATION_ENABLED
-    ? `AI店番エージェント(値切り交渉)機能: 有効(通常フロア=${NEGOTIATE_FLOOR_COST_NUM} ICHIGO, 会話の質次第で最大${NEGOTIATE_ABSOLUTE_FLOOR_NUM} ICHIGOまで, 最大${NEGOTIATE_MAX_TURNS_NUM}ターン, フォールバック順=OpenAI(${OPENAI_API_KEY ? '有効' : '無効'})→Anthropic(${ANTHROPIC_API_KEY ? '有効' : '無効'})→Cloudflare(${(CF_ACCOUNT_ID && CF_API_TOKEN) ? '有効' : '無効'}))`
-    : 'AI店番エージェント(値切り交渉)機能: 無効(OPENAI_API_KEY / ANTHROPIC_API_KEY / CF_ACCOUNT_ID+CF_API_TOKENのいずれも、またはNEGOTIATE_FLOOR_COSTが未設定) → /negotiate/はスタッフが価格を直接決めるmanualモードで動作します'
+    ? `AI店番エージェント(値切り交渉)機能: 有効(通常フロア=${NEGOTIATE_FLOOR_COST_NUM} ICHIGO, 会話の質次第で最大${NEGOTIATE_ABSOLUTE_FLOOR_NUM} ICHIGOまで, 最大${NEGOTIATE_MAX_TURNS_NUM}ターン, フォールバック順=OpenAI(${OPENAI_API_KEY ? '有効' : '無効'})→Anthropic(${ANTHROPIC_API_KEY ? '有効' : '無効'})→Cloudflare(${(CLOUDFLARE_ACCOUNT_ID && CLOUDFLARE_API_TOKEN) ? '有効' : '無効'}))`
+    : 'AI店番エージェント(値切り交渉)機能: 無効(OPENAI_API_KEY / ANTHROPIC_API_KEY / CLOUDFLARE_ACCOUNT_ID+CLOUDFLARE_API_TOKENのいずれも、またはNEGOTIATE_FLOOR_COSTが未設定) → /negotiate/はスタッフが価格を直接決めるmanualモードで動作します'
 );
 
 console.log(
@@ -702,7 +702,7 @@ app.post('/negotiate-start', (req, res) => {
 
   const mode = NEGOTIATION_ENABLED ? 'ai' : 'manual';
   const startingPrice = Number(COST);
-  const openingReply = `いらっしゃい!ICHIGOガチャガチャへようこそ。今日のお値段は${startingPrice} ICHIGOだよ。何か言いたいことある?`;
+  const openingReply = `いらっしゃい!ICHIGOガチャガチャへようこそ。今日のお値段は${startingPrice} ICHIGOだよ。授業でやったような話でもしてくれたら、ちょっとサービスしちゃうかもよ?何か言いたいことある?`;
 
   const sessionId = crypto.randomUUID();
   const now = Date.now();
@@ -779,9 +779,9 @@ app.post('/negotiate-message', async (req, res) => {
       openaiModel: OPENAI_MODEL,
       anthropicApiKey: ANTHROPIC_API_KEY,
       anthropicModel: ANTHROPIC_MODEL,
-      cloudflareAccountId: CF_ACCOUNT_ID,
-      cloudflareApiToken: CF_API_TOKEN,
-      cloudflareModel: CF_MODEL,
+      cloudflareAccountId: CLOUDFLARE_ACCOUNT_ID,
+      cloudflareApiToken: CLOUDFLARE_API_TOKEN,
+      cloudflareModel: CLOUDFLARE_MODEL,
     });
 
     let replyText;
@@ -1121,7 +1121,7 @@ app.post('/online-negotiate-start', (req, res) => {
   }
 
   const startingPrice = Number(COST);
-  const openingReply = `いらっしゃい!ICHIGOガチャガチャへようこそ。オンラインでも同じお値段(${startingPrice} ICHIGO)から始めるよ。何か言いたいことある?`;
+  const openingReply = `いらっしゃい!ICHIGOガチャガチャへようこそ。オンラインでも同じお値段(${startingPrice} ICHIGO)から始めるよ。授業でやったような話でもしてくれたら、ちょっとサービスしちゃうかもよ?何か言いたいことある?`;
   const sessionId = crypto.randomUUID();
   const now = Date.now();
   const session = {
@@ -1189,9 +1189,9 @@ app.post('/online-negotiate-message', async (req, res) => {
       openaiModel: OPENAI_MODEL,
       anthropicApiKey: ANTHROPIC_API_KEY,
       anthropicModel: ANTHROPIC_MODEL,
-      cloudflareAccountId: CF_ACCOUNT_ID,
-      cloudflareApiToken: CF_API_TOKEN,
-      cloudflareModel: CF_MODEL,
+      cloudflareAccountId: CLOUDFLARE_ACCOUNT_ID,
+      cloudflareApiToken: CLOUDFLARE_API_TOKEN,
+      cloudflareModel: CLOUDFLARE_MODEL,
     });
 
     let replyText;
