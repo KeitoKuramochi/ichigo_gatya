@@ -352,7 +352,7 @@ function renderOnlineTiles(sessions) {
     const tile = document.createElement("div");
     tile.className = "onlineTile";
     const statusLabel = s.status === "awaiting-payment" ? `${s.price} ICHIGOで確定・支払い待ち`
-      : s.status === "awaiting-claim" ? "NFT受け取り待ち"
+      : s.status === "awaiting-claim" ? "景品お披露目中"
       : `${s.turn}/${s.maxTurn}ターン`;
     // displayNameはサーバー側でサニタイズ済みだが、lastMessage(参加者のチャット本文)は
     // 自由文字列なのでinnerHTMLで組み立てず、textContentで個別に設定する(XSS対策)。

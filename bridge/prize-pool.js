@@ -1,8 +1,7 @@
 import { randomInt } from "node:crypto";
 
-// オンライン参加者向けNFTの景品プール。
-// id は IchigoGachaNFT.sol の prizeId とそのまま対応する。一度本番で配布した後にidを変更すると、
-// 既にmintされたトークンの意味が変わってしまうため、画像/名前/weightは差し替えてよいが id は固定する。
+// オンライン参加者向け景品(記念画像)プール。NFTのmintは行わず、この画像を
+// その場で見せる/保存させるだけ(id/weight/画像の差し替えは自由)。
 // image は bridge/nft-images/ 以下のファイル名(実画像が用意でき次第、プレースホルダーから差し替える)。
 export const PRIZE_POOL = [
   { id: 1, name: "いちごほし(仮)", weight: 18, image: "prize-1.png" },

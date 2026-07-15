@@ -85,12 +85,13 @@
   h2 { font-family: var(--font-display); }
   h3 { font-family: var(--font-display); font-size: 1.05rem; margin: 0 0 8px; }
 
-  button {
+  button, .btnAnchor {
     font-family: var(--font-body); font-size: 1rem; font-weight: 700; padding: 11px 18px;
     border-radius: 10px; border: none; background: var(--vermilion); color: #fff8ee; cursor: pointer;
     box-shadow: 0 3px 0 var(--vermilion-deep), 0 4px 8px rgba(0,0,0,.18);
+    display: inline-flex; align-items: center; justify-content: center; text-decoration: none;
   }
-  button:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--vermilion-deep), 0 2px 4px rgba(0,0,0,.18); }
+  button:active, .btnAnchor:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--vermilion-deep), 0 2px 4px rgba(0,0,0,.18); }
   button:disabled { background: #cec2ab; color: #8c7f68; box-shadow: none; cursor: default; }
   .iconBadge {
     display: inline-flex; align-items: center; justify-content: center;
@@ -183,11 +184,6 @@
   .receiptRow { margin: 6px 0; }
   .resolutionButtons { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 
-  .mockBanner {
-    background: var(--gold); color: #2b2118; font-size: .82rem; font-weight: 700;
-    padding: 8px 12px; border-radius: 8px; margin: 10px 0; text-align: center;
-  }
-
   /* ==== 音のオン/オフ ====
      negotiate/index.htmlと同じ仕組み。位置は「画面(viewport)の角」ではなく
      「カード(.appShell、--card-widthの幅で中央寄せ)の右上」を指すように、
@@ -217,13 +213,13 @@
   <div class="counterLedge"></div>
 
   <div class="page">
-    <p class="lead">会場に来られない方向けのオンライン参加ページです。ウォレットを接続して店番AIと値切り交渉し、決まった価格でICHIGOを支払うと、その場でガチャを回して記念NFTを受け取れます。</p>
+    <p class="lead">会場に来られない方向けのオンライン参加ページです。ウォレットを接続して店番AIと値切り交渉し、決まった価格でICHIGOを支払うと、その場でガチャを回して記念画像を受け取れます。</p>
     <p class="muted"><a href="https://ichigo-gatya-web.vercel.app/" target="_blank" rel="noopener" style="color:inherit">🍓 ICHIGOガチャガチャってなに?しくみ・つくった話はこちら</a></p>
 
     <div class="howItWorks">
       <div class="howStep"><span class="stepNum">1</span><p>ウォレット(MetaMask等)を接続します。ICHIGOトークン(Optimism)と、少額のETH(ガス代)が必要です。</p></div>
       <div class="howStep"><span class="stepNum">2</span><p>店番AIとチャットで値切り交渉。決まった価格でICHIGOを送金します(会場での購入と同じ扱いです)。</p></div>
-      <div class="howStep"><span class="stepNum">3</span><p>その場でガチャを1回。出た景品のNFTを、ご自身のウォレットで受け取ります(受け取り時のガス代はご自身の負担です)。</p></div>
+      <div class="howStep"><span class="stepNum">3</span><p>その場でガチャを1回。出た景品の記念画像をその場で表示し、保存できます。</p></div>
     </div>
 
     <h3>どんな景品が出るの?</h3>
@@ -278,27 +274,24 @@
     </div>
 
     <div id="revealSection" class="hidden">
-      <p class="mockBanner hidden" id="mockBannerReveal">テスト運用中(NFT配布はシミュレーションです)</p>
       <div class="prizeReveal">
         <img id="prizeRevealImg" class="prizeRevealImg" src="" alt="">
         <p class="prizeRevealName" id="prizeRevealName"></p>
-        <p class="muted">おめでとうございます!このNFTをご自身のウォレットで受け取ってください(ガス代がかかります)。</p>
+        <p class="muted">おめでとうございます!記念画像をお受け取りください。</p>
       </div>
-      <button id="claimBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-decide.png" alt=""></span>NFTを受け取る</button>
     </div>
 
     <div id="receiptSection" class="hidden receipt">
       <img src="assets/receipt-stamp.png" alt="" class="receiptStamp">
-      <p class="mockBanner hidden" id="mockBannerReceipt">テスト運用中(NFT配布はシミュレーションです)</p>
       <h2 id="receiptTitle"></h2>
       <p class="receiptRow">お支払い <span class="priceTag"><strong id="receiptPriceLabel"></strong> <span class="unit">ICHIGO</span></span></p>
       <p class="receiptRow muted" id="receiptTimeLabel"></p>
       <div class="prizeReveal">
         <img id="receiptPrizeImg" class="prizeRevealImg" src="" alt="">
         <p class="prizeRevealName" id="receiptPrizeName"></p>
+        <a id="receiptPrizeDownload" class="secondaryBtn btnAnchor" href="" download><span class="iconBadge"><img class="btnIcon" src="assets/icon-decide.png" alt=""></span>画像を保存</a>
       </div>
       <p class="receiptRow muted" id="receiptTxHashLabel"></p>
-      <p class="receiptRow muted hidden" id="receiptClaimTxHashLabel"></p>
       <p class="muted hidden" id="receiptChatLabel" style="margin-top:16px">ここまでの会話:</p>
       <div class="chat hidden" id="receiptChat"></div>
       <p class="muted"><a href="https://ichigo-gatya-web.vercel.app/" target="_blank" rel="noopener" style="color:inherit">🍓 つくった話・裏話はこちら</a></p>
@@ -318,10 +311,6 @@ const ERC20_ABI = [
   "function balanceOf(address) view returns (uint256)",
   "function decimals() view returns (uint8)",
   "function transfer(address to, uint256 amount) returns (bool)",
-];
-// bridge/server.js側のNFT_ABIと対応(claim()のみ。mint検知用イベントはクライアントには不要)。
-const NFT_ABI = [
-  "function claim(tuple(address wallet, uint256 prizeId, bytes32 sessionNonce, uint256 expiry) voucher, bytes signature) external",
 ];
 const SESSION_STORAGE_KEY = "ichigo_online_session";
 const SESSION_POINTER_TTL_MS = 20 * 60 * 1000;
@@ -580,6 +569,7 @@ async function startNegotiation(nameToSubmit) {
     return;
   }
   if (data.status === "awaiting-claim" && data.prize) {
+    finalPrice = data.price;
     showPrizeReveal(data.prize, null);
     return;
   }
@@ -631,21 +621,33 @@ async function sendChatMessage(message) {
   }
 }
 
-// 決済確認後、景品が決まった演出。まだmint(claim)していない状態でページを
-// 再読み込みした場合(data.status === "awaiting-claim")もここに合流する。
-function showPrizeReveal(prize, voucherPayload) {
+const PRIZE_REVEAL_DISPLAY_MS = 1600;
+
+// 決済確認後、景品が決まった演出。まだ受け取り確定(サーバーへの/online-claim-confirm)を
+// していない状態でページを再読み込みした場合(data.status === "awaiting-claim")もここに合流する。
+// 参加者側はウォレットでの追加操作は不要なので、少し見せたら自動でレシート画面に進む。
+function showPrizeReveal(prize, txHash) {
   hideAllSections();
-  currentPrize = { ...prize, voucherPayload };
+  currentPrize = prize;
   $("prizeRevealImg").src = `/nft-images/${prize.image}`;
   $("prizeRevealName").textContent = prize.name;
-  $("mockBannerReveal").classList.toggle("hidden", !(voucherPayload && voucherPayload.mock));
   $("revealSection").classList.remove("hidden");
   setCharacterImage("thanks");
+
+  fetch("/online-claim-confirm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId }),
+  }).catch(() => {});
+
+  setTimeout(() => {
+    enterReceiptPhase({ prize, price: finalPrice, txHash: txHash || null });
+  }, PRIZE_REVEAL_DISPLAY_MS);
 }
 
-function enterReceiptPhase({ prize, price, txHash, claimTxHash, mock }) {
+function enterReceiptPhase({ prize, price, txHash }) {
   const receipt = {
-    wallet: account, displayName, price, txHash, claimTxHash, prize, mock,
+    wallet: account, displayName, price, txHash, prize,
     paidAt: Date.now(), transcript: [...chatTranscript],
   };
   writeJSON(RECEIPT_STORAGE_KEY, receipt);
@@ -658,16 +660,16 @@ function renderReceipt(receipt) {
   $("connectBtn").classList.add("hidden");
   $("account").classList.add("hidden");
   $("balanceLabel").classList.add("hidden");
-  $("mockBannerReceipt").classList.toggle("hidden", !receipt.mock);
   $("receiptTitle").textContent = `${receipt.displayName || "お客"}さん、お買い上げありがとうございます!`;
   $("receiptPriceLabel").textContent = receipt.price;
   $("receiptTimeLabel").textContent = "支払い時刻: " + new Date(receipt.paidAt).toLocaleString("ja-JP");
   $("receiptPrizeImg").src = `/nft-images/${receipt.prize.image}`;
   $("receiptPrizeName").textContent = receipt.prize.name;
-  $("receiptTxHashLabel").textContent = "送金txHash: " + receipt.txHash;
-  if (receipt.claimTxHash) {
-    $("receiptClaimTxHashLabel").textContent = "NFT受け取りtxHash: " + receipt.claimTxHash;
-    $("receiptClaimTxHashLabel").classList.remove("hidden");
+  $("receiptPrizeDownload").href = `/nft-images/${receipt.prize.image}`;
+  $("receiptPrizeDownload").download = receipt.prize.image;
+  $("receiptTxHashLabel").classList.toggle("hidden", !receipt.txHash);
+  if (receipt.txHash) {
+    $("receiptTxHashLabel").textContent = "送金txHash: " + receipt.txHash;
   }
   renderPastChat("receiptChat", "receiptChatLabel", receipt.transcript);
   $("receiptSection").classList.remove("hidden");
@@ -816,62 +818,10 @@ $("payBtn").addEventListener("click", async () => {
       return;
     }
 
-    showPrizeReveal(data.prize, {
-      voucher: data.voucher,
-      signature: data.signature,
-      mock: data.mock,
-      contractAddress: data.contractAddress,
-      chainId: data.chainId,
-      txHash: tx.hash,
-    });
+    showPrizeReveal(data.prize, tx.hash);
     showStatus("", "");
   } catch (err) {
     showStatus("エラー: " + (err.shortMessage || err.message || err) + (txHashForErrorDisplay ? `\n(送金txHash: ${txHashForErrorDisplay})` : ""), "err");
-  } finally {
-    btn.disabled = false;
-  }
-});
-
-$("claimBtn").addEventListener("click", async () => {
-  const btn = $("claimBtn");
-  const payload = currentPrize?.voucherPayload;
-  if (!payload) {
-    showStatus("受け取り情報が見つかりません。ページを再読み込みしてください", "err");
-    return;
-  }
-  btn.disabled = true;
-  try {
-    let claimTxHash = null;
-    if (payload.mock) {
-      // モックモード: コントラクト未デプロイのためclaim()は呼ばず、演出だけ行う。
-      showStatus("(テスト運用中)NFT配布をシミュレーションしています…", "");
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-    } else {
-      showStatus("MetaMaskでNFT受け取り(mint)を承認してください…", "");
-      const nftContract = new ethers.Contract(payload.contractAddress, NFT_ABI, signer);
-      const tx = await nftContract.claim(payload.voucher, payload.signature);
-      showStatus("受け取りを確認中…(数秒)", "");
-      await tx.wait();
-      claimTxHash = tx.hash;
-    }
-
-    // 参加者自身の成功表示は、mintのtx.wait()成功時点で即座に見せる。サーバーへの
-    // 通知(投影演出・レシート用の後追い)はここでは待たない(fire-and-forget)。
-    fetch("/online-claim-confirm", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId, txHash: claimTxHash || payload.txHash }),
-    }).catch(() => {});
-
-    enterReceiptPhase({
-      prize: currentPrize,
-      price: finalPrice,
-      txHash: payload.txHash,
-      claimTxHash,
-      mock: Boolean(payload.mock),
-    });
-  } catch (err) {
-    showStatus("受け取りに失敗しました: " + (err.shortMessage || err.message || err), "err");
   } finally {
     btn.disabled = false;
   }

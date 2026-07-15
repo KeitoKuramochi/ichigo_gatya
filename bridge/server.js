@@ -145,32 +145,25 @@ if (NEGOTIATION_ENABLED && !(NEGOTIATE_ABSOLUTE_FLOOR_NUM >= 0 && NEGOTIATE_ABSO
   process.exit(1);
 }
 
-// オンライン参加(ウォレット接続→AI交渉→ICHIGO送金→NFT受け取り)機能。現地用の
+// オンライン参加(ウォレット接続→AI交渉→ICHIGO送金→記念画像受け取り)機能。現地用の
 // negotiationSessions/currentSessionIdとは完全に別物として扱う(状態管理・エンドポイントを
 // 共有しない)。AI交渉自体は現地と同じgetNegotiationReply()を使うため、AIが無効
 // (NEGOTIATION_ENABLED=false)ならオンライン参加も無効にする(現地のmanualモードのような
 // 「スタッフが対面で代わりに交渉する」代替が、遠隔の参加者には用意できないため)。
 //
-// NFTの配布(mint)は、参加者自身のウォレットが署名付きバウチャーを使ってclaimする方式。
-// GACHA_NFT_MOCK_MODE='1'ならコントラクト未デプロイでも(偽の署名で)フロー全体を試せる。
-// 本番ではNFT_CONTRACT_ADDR/ONLINE_MINTER_PRIVATE_KEYの両方を設定し、GACHA_NFT_MOCK_MODEは未設定にする。
+// 景品はNFT(オンチェーンmint)ではなく、決済確認後にサーバーが抽選した画像をその場で
+// 見せる/保存させるだけの方式に統一している(コントラクトのデプロイ・鍵管理が不要)。
+// contracts/(IchigoGachaNFT.sol)は将来onchain化する場合の下敷きとして残しているが、
+// 現在のフローからは呼び出していない。
 const {
-  GACHA_NFT_MOCK_MODE,
-  NFT_CONTRACT_ADDR,
-  ONLINE_MINTER_PRIVATE_KEY,
   ONLINE_MAX_CONCURRENT = '2',
-  ONLINE_VOUCHER_TTL_MS = String(24 * 60 * 60 * 1000),
 } = process.env;
 
-const ONLINE_MOCK_MODE = GACHA_NFT_MOCK_MODE === '1';
-const ONLINE_NFT_CONFIGURED = ONLINE_MOCK_MODE || Boolean(NFT_CONTRACT_ADDR && ONLINE_MINTER_PRIVATE_KEY);
-// AIが有効、かつNFTの配布方法(mockまたは実コントラクト)が用意できている場合のみ、
-// オンライン参加そのものを受け付ける(実ICHIGOを払わせておいてNFTを渡せない、という
-// 事故を避けるため、決済より前の入口(/online-negotiate-start)でまとめて弾く)。
-const ONLINE_ENABLED = NEGOTIATION_ENABLED && ONLINE_NFT_CONFIGURED;
+// オンライン参加そのものはAIが有効な場合のみ受け付ける(実ICHIGOを払わせておいて
+// 景品を渡せない、という事故を避けるため、決済より前の入口(/online-negotiate-start)で弾く)。
+const ONLINE_ENABLED = NEGOTIATION_ENABLED;
 const ONLINE_MAX_CONCURRENT_NUM = parseInt(ONLINE_MAX_CONCURRENT, 10);
-const ONLINE_VOUCHER_TTL_MS_NUM = parseInt(ONLINE_VOUCHER_TTL_MS, 10);
-const ONLINE_CHAIN_ID = 10; // Optimismメインネット。ICHIGO送金・NFTコントラクトともに同じチェーン
+const ONLINE_CHAIN_ID = 10; // Optimismメインネット。ICHIGO送金はこのチェーン
 
 console.log(
   // /negotiate/自体は常に使える(AIが無ければスタッフが直接価格を決めるmanualモードに
@@ -182,12 +175,9 @@ console.log(
 
 console.log(
   ONLINE_ENABLED
-    ? `オンライン参加機能: 有効(同時最大${ONLINE_MAX_CONCURRENT_NUM}人, NFT配布=${ONLINE_MOCK_MODE ? 'モックモード(テスト運用中)' : `実コントラクト ${NFT_CONTRACT_ADDR}`})`
-    : `オンライン参加機能: 無効(${!NEGOTIATION_ENABLED ? 'AI店番が無効' : 'NFT_CONTRACT_ADDR/ONLINE_MINTER_PRIVATE_KEYまたはGACHA_NFT_MOCK_MODEが未設定'})`
+    ? `オンライン参加機能: 有効(同時最大${ONLINE_MAX_CONCURRENT_NUM}人, 景品配布=画像表示のみ)`
+    : 'オンライン参加機能: 無効(AI店番が無効)'
 );
-if (ONLINE_MOCK_MODE) {
-  console.warn('⚠️ GACHA_NFT_MOCK_MODE=1: オンライン参加のNFT配布は実際にはmintされません(テスト運用)。本番前に必ず無効化してください。');
-}
 
 const ERC20_ABI = [
   'event Transfer(address indexed from, address indexed to, uint256 value)',
@@ -197,19 +187,6 @@ const ERC20_ABI = [
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const tokenInterface = new ethers.Interface(ERC20_ABI);
 const tokenContract = new ethers.Contract(TOKEN_ADDR, ERC20_ABI, provider);
-
-// IchigoGachaNFT.sol(contracts/)側のclaim()と対応する、mint検知用の最小ABI。
-// バウチャーの署名(signTypedData)自体はコントラクトを介さないオフチェーン処理なので、
-// ここではclaim()の関数シグネチャ(参加者が実際に呼ぶ)とTransferSingleイベント
-// (/online-claim-confirmでの検証用)だけを持たせる。
-const NFT_ABI = [
-  'function claim(tuple(address wallet, uint256 prizeId, bytes32 sessionNonce, uint256 expiry) voucher, bytes signature) external',
-  'event TransferSingle(address indexed operator, address indexed from, address indexed to, uint256 id, uint256 value)',
-];
-const nftInterface = new ethers.Interface(NFT_ABI);
-// バウチャーへの署名専用ウォレット。オフチェーン署名(signTypedData)しか行わないため、
-// providerに接続する必要も、ETHを保有する必要も無い(mint自体のガス代は参加者が払う)。
-const onlineMinterWallet = ONLINE_MINTER_PRIVATE_KEY ? new ethers.Wallet(ONLINE_MINTER_PRIVATE_KEY) : null;
 
 // プロセス再起動をまたいでも二重使用を防げるよう、使用済みtxHashをファイルに永続化する
 function loadUsedTxHashes() {
@@ -463,18 +440,18 @@ function applyFinalPrice(session, price) {
 }
 
 // ============================================================================
-// オンライン参加(ウォレット接続→AI交渉→ICHIGO送金→NFT受け取り)。
+// オンライン参加(ウォレット接続→AI交渉→ICHIGO送金→記念画像受け取り)。
 // 現地(negotiationSessions/currentSessionId、実機1台=同時1交渉の前提)とは
 // 完全に別のMapで管理する。実機の解除とは無関係なので、ESP32・/poll-unlock側は
 // このセクションを一切参照しない。
 //
 // 状態遷移: negotiating(AI交渉中) → awaiting-payment(価格確定・送金待ち)
-//         → awaiting-claim(送金確認済み・景品抽選済み・mint待ち) → claimed(mint確認済み)
+//         → awaiting-claim(送金確認済み・景品抽選済み・お披露目中) → claimed(お披露目済み)
 //         / expired(放置)
 // ============================================================================
 const onlineSessions = new Map(); // sessionId -> {status, wallet, displayName, transcript, ...}
 
-// 直近の「こういうNFTが出ました」演出用の短命キュー。現地のlastCompleted(単一スロット、
+// 直近の「こういう景品が出ました」演出用の短命キュー。現地のlastCompleted(単一スロット、
 // 手動解除のみ)と違い、オンラインは同時に複数人が完了しうるため配列にし、投影ページ側で
 // 順番に1件ずつ表示させる(古いものはここで自動的に間引く)。
 const onlineReveals = [];
@@ -1058,15 +1035,14 @@ app.post('/negotiate-receipt', (req, res) => {
 // ============================================================================
 
 // オンライン参加ページ(online/index.html)が最初に叩く、機能そのものの有効/無効確認。
-// AI無効時・NFT配布方法未設定時はここで理由付きで断る(決済させてからNFTを渡せない、
-// という事故を避けるため、参加登録の入口でまとめて弾く)。
+// AI無効時はここで理由付きで断る(決済させてから景品を渡せない、という事故を
+// 避けるため、参加登録の入口でまとめて弾く)。
 app.get('/online-status', (req, res) => {
   sweepStaleOnlineSessions();
   return res.json({
     enabled: ONLINE_ENABLED,
     maxConcurrent: ONLINE_MAX_CONCURRENT_NUM,
     activeCount: countActiveOnlineSessions(),
-    mock: ONLINE_MOCK_MODE,
   });
 });
 
@@ -1138,8 +1114,6 @@ app.post('/online-negotiate-start', (req, res) => {
     finalPriceWei: null,
     quoteExpiresAt: null,
     prize: null,
-    voucher: null,
-    claimTxHash: null,
   };
   onlineSessions.set(sessionId, session);
 
@@ -1285,9 +1259,10 @@ app.get('/online-negotiate-current', (req, res) => {
   });
 });
 
-// 決済確認後、景品を抽選してEIP-712バウチャーに署名する。/verify-and-unlockと同じ
-// オンチェーン検証ロジック(findValidTransfer/usedTxHashes/isRecentEnough)を再利用するが、
-// ESP32の解除リクエストは一切積まない(オンラインは物理カプセルを出さない)。
+// 決済確認後、景品を抽選する。/verify-and-unlockと同じオンチェーン検証ロジック
+// (findValidTransfer/usedTxHashes/isRecentEnough)を再利用するが、ESP32の解除リクエストは
+// 一切積まない(オンラインは物理カプセルを出さない)。景品はNFTをmintするのではなく、
+// この時点で決まった画像をレスポンスにそのまま含めて返すだけ(コントラクト連携なし)。
 app.post('/online-verify-and-claim', async (req, res) => {
   if (!ONLINE_ENABLED) {
     return res.status(503).json({ ok: false, error: 'オンライン参加は現在準備中です' });
@@ -1341,37 +1316,9 @@ app.post('/online-verify-and-claim', async (req, res) => {
     console.log(`オンライン決済 検証OK: ${txHash}`);
 
     const prize = pickPrize();
-    const sessionNonce = ethers.keccak256(ethers.toUtf8Bytes(sessionId));
-    const expiry = Math.floor(Date.now() / 1000) + Math.floor(ONLINE_VOUCHER_TTL_MS_NUM / 1000);
-    const voucher = { wallet: session.wallet, prizeId: prize.id, sessionNonce, expiry };
-
-    let signature;
-    if (ONLINE_MOCK_MODE) {
-      // モックモード: コントラクト未デプロイでもフロー全体を試せるよう、有効な署名の
-      // 代わりにダミー値を返す。クライアント側はmock:trueを見て実際のclaim()呼び出しを
-      // スキップし、演出だけシミュレーションする(本物のNFTは配布されない)。
-      signature = '0x' + '00'.repeat(65);
-    } else {
-      const domain = {
-        name: 'IchigoGachaNFT',
-        version: '1',
-        chainId: ONLINE_CHAIN_ID,
-        verifyingContract: NFT_CONTRACT_ADDR,
-      };
-      const types = {
-        ClaimVoucher: [
-          { name: 'wallet', type: 'address' },
-          { name: 'prizeId', type: 'uint256' },
-          { name: 'sessionNonce', type: 'bytes32' },
-          { name: 'expiry', type: 'uint256' },
-        ],
-      };
-      signature = await onlineMinterWallet.signTypedData(domain, types, voucher);
-    }
 
     session.status = 'awaiting-claim';
     session.prize = prize;
-    session.voucher = { voucher, signature };
 
     recentPurchases.unshift({
       txHash,
@@ -1386,9 +1333,7 @@ app.post('/online-verify-and-claim', async (req, res) => {
       recentPurchases.length = RECENT_PURCHASES_MAX;
     }
 
-    // 現地の投影ページでも「こういうNFTが出ました」を見せる演出のソース。mint(claim)自体が
-    // 成功したかどうかを待たず、景品が決まった時点で見せる(参加者がmintに手間取っても、
-    // 会場の演出自体は滞らせないため)。
+    // 現地の投影ページでも「こういう景品が出ました」を見せる演出のソース。
     onlineReveals.push({
       sessionId,
       displayName: session.displayName || maskWallet(session.wallet),
@@ -1399,12 +1344,7 @@ app.post('/online-verify-and-claim', async (req, res) => {
     return res.json({
       ok: true,
       txHash,
-      mock: ONLINE_MOCK_MODE,
-      contractAddress: ONLINE_MOCK_MODE ? null : NFT_CONTRACT_ADDR,
-      chainId: ONLINE_CHAIN_ID,
       prize: { id: prize.id, name: prize.name, image: prize.image },
-      voucher,
-      signature,
     });
   } catch (err) {
     console.error('online-verify-and-claim処理中にエラー:', err);
@@ -1412,53 +1352,16 @@ app.post('/online-verify-and-claim', async (req, res) => {
   }
 });
 
-// 参加者が実際にclaim()を叩いてmintした後の後追い通知(投影演出・レシート用)。
-// 参加者自身の成功画面表示はこれを待たない(mintのtx.wait()が成功した時点で即座に見せる)。
+// 景品画像を見せ終わったこと(=このセッションの用が済んだこと)の後追い通知。
+// 投影演出・レシート用の記録と、オンライン枠(同時最大人数)の解放のために呼ぶ。
 app.post('/online-claim-confirm', async (req, res) => {
-  const { sessionId, txHash } = req.body ?? {};
+  const { sessionId } = req.body ?? {};
   const session = typeof sessionId === 'string' ? onlineSessions.get(sessionId) : null;
   if (!session || session.status !== 'awaiting-claim') {
-    return res.status(400).json({ ok: false, error: 'このセッションはmint待ちの状態ではありません' });
-  }
-
-  if (!ONLINE_MOCK_MODE) {
-    if (typeof txHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
-      return res.status(400).json({ ok: false, error: 'txHashの形式が不正です' });
-    }
-    try {
-      const receipt = await getConfirmedReceiptWithRetry(txHash, 5, 1000);
-      if (!receipt || receipt.status !== 1) {
-        return res.status(400).json({ ok: false, error: 'mintトランザクションが確認できません' });
-      }
-      const minted = receipt.logs.some((log) => {
-        if (log.address.toLowerCase() !== NFT_CONTRACT_ADDR.toLowerCase()) return false;
-        let parsed;
-        try {
-          parsed = nftInterface.parseLog(log);
-        } catch {
-          return false;
-        }
-        return (
-          parsed?.name === 'TransferSingle' &&
-          parsed.args.from === ethers.ZeroAddress &&
-          parsed.args.to.toLowerCase() === session.wallet &&
-          parsed.args.id === BigInt(session.prize.id)
-        );
-      });
-      if (!minted) {
-        return res.status(400).json({ ok: false, error: 'このトランザクションからmintを確認できませんでした' });
-      }
-    } catch (err) {
-      console.error('online-claim-confirm処理中にエラー:', err);
-      return res.status(500).json({ ok: false, error: 'サーバー内部エラー' });
-    }
+    return res.status(400).json({ ok: false, error: 'このセッションは受け取り待ちの状態ではありません' });
   }
 
   session.status = 'claimed';
-  session.claimTxHash = ONLINE_MOCK_MODE ? txHash || null : txHash;
-  const purchase = recentPurchases.find((p) => p.wallet.toLowerCase() === session.wallet);
-  if (purchase) purchase.claimTxHash = session.claimTxHash;
-
   return res.json({ ok: true });
 });
 
