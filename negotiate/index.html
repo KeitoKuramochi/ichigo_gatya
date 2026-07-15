@@ -29,11 +29,12 @@
     --wood-dark: #5b3a20;
     --font-display: 'Shippori Mincho', serif; /* 見出し・値札用の明朝体 */
     --font-body: 'Zen Maru Gothic', system-ui, sans-serif; /* 本文用の丸ゴシック */
+    --card-width: 480px; /* bodyのmax-widthと同じ値。音量ボタンの位置計算(下記)にも使う */
   }
   * { box-sizing: border-box; }
   html { background: var(--paper); }
   body {
-    font-family: var(--font-body); max-width: 480px; margin: 0 auto; color: var(--ink);
+    font-family: var(--font-body); max-width: var(--card-width); margin: 0 auto; color: var(--ink);
     overflow-wrap: break-word;
     background: var(--paper) url(assets/paper-texture-tile.jpg);
     background-size: 340px 340px;
@@ -168,8 +169,13 @@
   .resolutionButtons { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 
   /* ==== 音のオン/オフ ==== */
+  /* 「right: 12px」だけだと画面(viewport)の角に張り付くため、デスクトップの広い
+     ブラウザではカード(bodyのmax-width、中央寄せ)から離れた場所にボタンだけ
+     浮いて見えてしまう(指摘を受けて修正)。カードの右端から12px、という位置に
+     なるよう、50vwからカード半幅を引いた分を足して計算する。 */
   .soundToggleBtn {
-    position: fixed; top: 12px; right: 12px; z-index: 20;
+    position: fixed; top: 12px; right: max(12px, calc(50vw - (var(--card-width) / 2) + 12px));
+    z-index: 20;
     width: 44px; height: 44px; padding: 0; border-radius: 50%;
     background: rgba(43,33,24,.55); color: #fff8ee; font-size: 1.3rem;
     box-shadow: 0 2px 6px rgba(0,0,0,.3);

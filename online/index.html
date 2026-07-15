@@ -30,6 +30,7 @@
   }
   * { box-sizing: border-box; }
   html { background: var(--indigo-deep); }
+  :root { --card-width: 480px; } /* 音量ボタン等の位置計算(下記)にも使う */
   body {
     font-family: var(--font-body); margin: 0; color: var(--ink);
     overflow-wrap: break-word;
@@ -39,15 +40,16 @@
      オンライン参加者はスマホのQR経由ではなくPCで開く人が多いと想定される。
      スマホ幅ではこれまで通り(スマホ版の見た目そのまま、下のメディアクエリは
      min-widthなので狭い画面には一切影響しない)。ある程度広い画面(デスクトップ)
-     では、スマホ用の480px幅カードをそのまま伸ばして間延びさせるのではなく、
-     カードを画面中央に据えて、周囲に舞台らしい背景(藍色のグラデーション)を
-     敷く「PC版の配置」にする。 */
+     では、スマホ用の480px幅カードをそのまま伸ばして縦長にするのではなく、
+     カードそのものを中サイズまで広げて画面を使い、周囲に舞台らしい背景
+     (藍色のグラデーション)を敷く「PC版の配置」にする。 */
   .appShell {
-    max-width: 480px; margin: 0 auto;
+    max-width: var(--card-width); margin: 0 auto;
     background: var(--paper) url(assets/paper-texture-tile.jpg);
     background-size: 340px 340px;
   }
   @media (min-width: 720px) {
+    :root { --card-width: 760px; }
     body {
       display: flex; justify-content: center; padding: 48px 20px;
       background: radial-gradient(circle at 50% -10%, var(--indigo) 0%, var(--indigo-deep) 60%) fixed;
@@ -56,6 +58,11 @@
       border-radius: 22px; overflow: hidden;
       box-shadow: 0 24px 70px rgba(0,0,0,.5);
     }
+    /* 縦に積むだけだとカードが広がった分だけ間延びして見えるため、
+       使い方ステップと景品ギャラリーは横に並べて画面幅を積極的に使う。 */
+    .howItWorks { flex-direction: row; }
+    .howStep { flex-direction: column; text-align: center; align-items: center; }
+    .prizeGallery { grid-template-columns: repeat(6, 1fr); }
   }
   .page { padding: 0 18px 40px; }
 
@@ -180,9 +187,26 @@
     background: var(--gold); color: #2b2118; font-size: .82rem; font-weight: 700;
     padding: 8px 12px; border-radius: 8px; margin: 10px 0; text-align: center;
   }
+
+  /* ==== 音のオン/オフ ====
+     negotiate/index.htmlと同じ仕組み。位置は「画面(viewport)の角」ではなく
+     「カード(.appShell、--card-widthの幅で中央寄せ)の右上」を指すように、
+     50vwからカード半幅を引いた分だけ右端の余白を足す形で計算する。これが無いと、
+     デスクトップの広い画面ではカードから離れた画面の隅にボタンだけ浮いて見えてしまう
+     (負値にならないようmax()で12px以上を保証)。 */
+  .soundToggleBtn {
+    position: fixed; top: 12px; right: max(12px, calc(50vw - (var(--card-width) / 2) + 12px));
+    z-index: 20;
+    width: 44px; height: 44px; padding: 0; border-radius: 50%;
+    background: rgba(43,33,24,.55); color: #fff8ee; font-size: 1.3rem;
+    box-shadow: 0 2px 6px rgba(0,0,0,.3);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .soundToggleBtn:active { transform: translateY(1px); box-shadow: 0 1px 3px rgba(0,0,0,.3); }
 </style>
 </head>
 <body>
+  <button id="soundToggleBtn" class="soundToggleBtn" type="button" aria-label="音のオン・オフ切り替え">🔊</button>
   <div class="appShell">
   <div class="stallHero">
     <img src="assets/header-banner.png" alt="" class="stallScene">
@@ -306,6 +330,35 @@ const RECEIPT_TTL_MS = 30 * 60 * 1000;
 const QUEUE_RETRY_MS = 5000;
 
 const $ = (id) => document.getElementById(id);
+
+// ==== 音(BGM) ====
+// negotiate/index.htmlと同じ仕組み: 「ウォレットを接続」のクリックという確実な
+// ユーザー操作をきっかけにBGMを開始する(ブラウザの自動再生ブロックを避けるため)。
+const SOUND_MUTE_KEY = "ichigo_online_sound_muted";
+let soundMuted = localStorage.getItem(SOUND_MUTE_KEY) === "1";
+const bgmAudio = new Audio("assets/bgm.mp3");
+bgmAudio.loop = true;
+bgmAudio.volume = 0.35;
+let bgmStarted = false;
+function startBgmIfNeeded() {
+  if (bgmStarted || soundMuted) return;
+  bgmStarted = true;
+  bgmAudio.play().catch(() => { bgmStarted = false; });
+}
+function updateSoundToggleUI() {
+  $("soundToggleBtn").textContent = soundMuted ? "🔇" : "🔊";
+}
+$("soundToggleBtn").addEventListener("click", () => {
+  soundMuted = !soundMuted;
+  localStorage.setItem(SOUND_MUTE_KEY, soundMuted ? "1" : "0");
+  updateSoundToggleUI();
+  if (soundMuted) {
+    bgmAudio.pause();
+  } else {
+    startBgmIfNeeded();
+  }
+});
+updateSoundToggleUI();
 
 function readJSON(key) {
   try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
@@ -626,6 +679,7 @@ $("buyAgainBtn").addEventListener("click", () => {
 });
 
 $("connectBtn").addEventListener("click", async () => {
+  startBgmIfNeeded();
   if (!window.ethereum) {
     if (IS_MOBILE) {
       const target = location.href.replace(/^https?:\/\//, "");

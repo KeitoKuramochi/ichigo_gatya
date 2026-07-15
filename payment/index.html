@@ -17,13 +17,26 @@
     --paper: #f3e7d2; --paper-deep: #e9dab8; --ink: #2b2118; --ink-soft: #7a6a54;
     --vermilion: #c1402e; --vermilion-deep: #8f2f20; --indigo: #33415c;
     --font-display: 'Shippori Mincho', serif; --font-body: 'Zen Maru Gothic', system-ui, sans-serif;
+    --card-width: 480px; /* bodyのmax-widthと同じ値。音量ボタンの位置計算にも使う */
   }
   * { box-sizing: border-box; }
   html { background: var(--paper); }
   body {
-    font-family: var(--font-body); max-width: 480px; margin: 0 auto; padding: 0 18px 40px; color: var(--ink); background: var(--paper);
+    font-family: var(--font-body); max-width: var(--card-width); margin: 0 auto; padding: 0 18px 40px; color: var(--ink); background: var(--paper);
     overflow-wrap: break-word; /* ウォレットアドレス等、スペース無しの長い文字列が狭い画面ではみ出さないようにする(negotiate/index.htmlと同じ対策) */
   }
+  /* negotiate/index.htmlと同じ音のオン/オフボタン。位置は「viewportの角」ではなく
+     「カード(bodyのmax-width、中央寄せ)の右上」を指すよう計算する(デスクトップの
+     広い画面でカードから離れた場所にボタンだけ浮いて見えないようにするため)。 */
+  .soundToggleBtn {
+    position: fixed; top: 12px; right: max(12px, calc(50vw - (var(--card-width) / 2) + 12px));
+    z-index: 20;
+    width: 44px; height: 44px; padding: 0; border-radius: 50%;
+    background: rgba(43,33,24,.55); color: #fff8ee; font-size: 1.3rem;
+    box-shadow: 0 2px 6px rgba(0,0,0,.3);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .soundToggleBtn:active { transform: translateY(1px); box-shadow: 0 1px 3px rgba(0,0,0,.3); }
   h1 { font-family: var(--font-display); font-size: 1.4rem; margin: 20px 0 4px; }
   .headerBanner { display: block; width: calc(100% + 36px); margin: 0 -18px 12px; height: auto; }
   .iconBadge {
@@ -57,6 +70,7 @@
 </style>
 </head>
 <body>
+  <button id="soundToggleBtn" class="soundToggleBtn" type="button" aria-label="音のオン・オフ切り替え">🔊</button>
   <img src="assets/header-banner-simple.png" alt="" class="headerBanner">
   <h1>ICHIGO ガチャガチャ</h1>
   <p class="muted">ウォレットを接続して支払うと、実機のガチャガチャのロックが解除されます。</p>
@@ -82,6 +96,33 @@ const ERC20_ABI = [
 
 const $ = (id) => document.getElementById(id);
 $("costLabel").textContent = COST;
+
+// ==== 音(BGM) ==== negotiate/index.htmlと同じ仕組み。
+const SOUND_MUTE_KEY = "ichigo_payment_sound_muted";
+let soundMuted = localStorage.getItem(SOUND_MUTE_KEY) === "1";
+const bgmAudio = new Audio("assets/bgm.mp3");
+bgmAudio.loop = true;
+bgmAudio.volume = 0.35;
+let bgmStarted = false;
+function startBgmIfNeeded() {
+  if (bgmStarted || soundMuted) return;
+  bgmStarted = true;
+  bgmAudio.play().catch(() => { bgmStarted = false; });
+}
+function updateSoundToggleUI() {
+  $("soundToggleBtn").textContent = soundMuted ? "🔇" : "🔊";
+}
+$("soundToggleBtn").addEventListener("click", () => {
+  soundMuted = !soundMuted;
+  localStorage.setItem(SOUND_MUTE_KEY, soundMuted ? "1" : "0");
+  updateSoundToggleUI();
+  if (soundMuted) {
+    bgmAudio.pause();
+  } else {
+    startBgmIfNeeded();
+  }
+});
+updateSoundToggleUI();
 
 // このページ自身がブリッジサーバーから配信されている場合は同一オリジン(相対パス)でよいが、
 // Vercelなど別オリジンで配信する場合は、QRコードのURLに ?bridge=https://xxxx のように
@@ -160,6 +201,7 @@ if (window.ethereum) {
 }
 
 $("connectBtn").addEventListener("click", async () => {
+  startBgmIfNeeded();
   if (!window.ethereum) {
     showStatus("ウォレットが見つかりません。MetaMaskアプリ内のブラウザでこのページを開いてください", "err");
     return;
