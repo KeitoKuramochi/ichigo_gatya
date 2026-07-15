@@ -332,19 +332,31 @@ const QUEUE_RETRY_MS = 5000;
 const $ = (id) => document.getElementById(id);
 
 // ==== 音(BGM) ====
-// negotiate/index.htmlと同じ仕組み: 「ウォレットを接続」のクリックという確実な
-// ユーザー操作をきっかけにBGMを開始する(ブラウザの自動再生ブロックを避けるため)。
+// 「開いたらデフォルトで音が出ていて、消したければ消せる」という要望に対応する。
+// ブラウザの自動再生ブロックはユーザー操作が1回も無い再生を防ぐだけなので、
+// このページ内での最初の操作(クリック・タップ・キー入力のいずれか)をきっかけに
+// 開始すれば、体感としては「開いたらすぐ音が出る」に近くなる。
 const SOUND_MUTE_KEY = "ichigo_online_sound_muted";
 let soundMuted = localStorage.getItem(SOUND_MUTE_KEY) === "1";
 const bgmAudio = new Audio("assets/bgm.mp3");
 bgmAudio.loop = true;
 bgmAudio.volume = 0.35;
-let bgmStarted = false;
-function startBgmIfNeeded() {
-  if (bgmStarted || soundMuted) return;
-  bgmStarted = true;
-  bgmAudio.play().catch(() => { bgmStarted = false; });
+// 再生開始/再開は常にこの関数だけを通す(以前は「一度も鳴らしていないか」の
+// フラグ(bgmStarted)で判定していたため、ミュート→ミュート解除で「もう開始済みだから」
+// と判定されて再開しなくなる不具合があった。play()は再生中に呼んでも害が無いので、
+// 常にplay()を呼ぶだけの単純な形にする)。
+function playBgm() {
+  if (soundMuted) return;
+  bgmAudio.play().catch(() => {});
 }
+function startBgmOnFirstInteraction() {
+  const start = () => {
+    playBgm();
+    ["pointerdown", "keydown", "touchstart"].forEach((ev) => document.removeEventListener(ev, start));
+  };
+  ["pointerdown", "keydown", "touchstart"].forEach((ev) => document.addEventListener(ev, start));
+}
+startBgmOnFirstInteraction();
 function updateSoundToggleUI() {
   $("soundToggleBtn").textContent = soundMuted ? "🔇" : "🔊";
 }
@@ -355,7 +367,7 @@ $("soundToggleBtn").addEventListener("click", () => {
   if (soundMuted) {
     bgmAudio.pause();
   } else {
-    startBgmIfNeeded();
+    playBgm(); // 消してからもう一度点けた時に、確実に再生を再開させる
   }
 });
 updateSoundToggleUI();
@@ -679,7 +691,7 @@ $("buyAgainBtn").addEventListener("click", () => {
 });
 
 $("connectBtn").addEventListener("click", async () => {
-  startBgmIfNeeded();
+  playBgm();
   if (!window.ethereum) {
     if (IS_MOBILE) {
       const target = location.href.replace(/^https?:\/\//, "");

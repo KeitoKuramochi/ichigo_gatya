@@ -97,18 +97,29 @@ const ERC20_ABI = [
 const $ = (id) => document.getElementById(id);
 $("costLabel").textContent = COST;
 
-// ==== 音(BGM) ==== negotiate/index.htmlと同じ仕組み。
+// ==== 音(BGM) ====
+// 「開いたらデフォルトで音が出ていて、消したければ消せる」に対応するため、
+// 特定のボタンを待たず、ページ内での最初の操作(クリック・タップ・キー入力)を
+// きっかけに開始する(ブラウザの自動再生ブロックはユーザー操作自体を要求するだけなので)。
 const SOUND_MUTE_KEY = "ichigo_payment_sound_muted";
 let soundMuted = localStorage.getItem(SOUND_MUTE_KEY) === "1";
 const bgmAudio = new Audio("assets/bgm.mp3");
 bgmAudio.loop = true;
 bgmAudio.volume = 0.35;
-let bgmStarted = false;
-function startBgmIfNeeded() {
-  if (bgmStarted || soundMuted) return;
-  bgmStarted = true;
-  bgmAudio.play().catch(() => { bgmStarted = false; });
+// 再生開始/再開は常にこの関数だけを通す(以前の「一度も鳴らしていないか」フラグでは
+// ミュート解除時に再開しない不具合があったため、常にplay()を呼ぶだけの形にした)。
+function playBgm() {
+  if (soundMuted) return;
+  bgmAudio.play().catch(() => {});
 }
+function startBgmOnFirstInteraction() {
+  const start = () => {
+    playBgm();
+    ["pointerdown", "keydown", "touchstart"].forEach((ev) => document.removeEventListener(ev, start));
+  };
+  ["pointerdown", "keydown", "touchstart"].forEach((ev) => document.addEventListener(ev, start));
+}
+startBgmOnFirstInteraction();
 function updateSoundToggleUI() {
   $("soundToggleBtn").textContent = soundMuted ? "🔇" : "🔊";
 }
@@ -119,7 +130,7 @@ $("soundToggleBtn").addEventListener("click", () => {
   if (soundMuted) {
     bgmAudio.pause();
   } else {
-    startBgmIfNeeded();
+    playBgm();
   }
 });
 updateSoundToggleUI();
@@ -201,7 +212,7 @@ if (window.ethereum) {
 }
 
 $("connectBtn").addEventListener("click", async () => {
-  startBgmIfNeeded();
+  playBgm();
   if (!window.ethereum) {
     showStatus("ウォレットが見つかりません。MetaMaskアプリ内のブラウザでこのページを開いてください", "err");
     return;

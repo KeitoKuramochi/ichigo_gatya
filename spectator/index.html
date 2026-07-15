@@ -154,10 +154,39 @@ const $ = (id) => document.getElementById(id);
 const bgmAudio = new Audio("assets/bgm.mp3");
 bgmAudio.loop = true;
 bgmAudio.volume = 0.3;
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+  return audioCtx;
+}
 $("soundGateBtn").addEventListener("click", () => {
   bgmAudio.play().catch(() => {});
+  getAudioCtx(); // 新着チャットの通知音(下記)も、この最初のタップでまとめて解禁しておく
   $("soundGate").classList.add("hidden");
 });
+
+// ==== 新着チャットの通知音 ====
+// この投影画面は会場で1番人目につく場所なので、新しい発言が来たことに気付きやすいように
+// 短いチャイムを鳴らす(外部音源は持たず、negotiate/index.htmlと同様にオシレーターで
+// その場で合成する)。
+function chimeBeep({ freq, durationMs, delayMs = 0 }) {
+  const ctx = getAudioCtx();
+  const t0 = ctx.currentTime + delayMs / 1000;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = "sine";
+  osc.frequency.setValueAtTime(freq, t0);
+  gain.gain.setValueAtTime(0.22, t0);
+  gain.gain.exponentialRampToValueAtTime(0.001, t0 + durationMs / 1000);
+  osc.connect(gain).connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + durationMs / 1000 + 0.02);
+}
+function playChime() {
+  chimeBeep({ freq: 784, durationMs: 120 });
+  chimeBeep({ freq: 1046.5, durationMs: 160, delayMs: 90 });
+}
 
 // 「再描画をスキップするか」の判定キー。transcript.lengthだけで判定すると、
 // Aさんの交渉終了直後にBさんが交渉を始め、たまたま会話の往復回数が同じ長さに
@@ -166,11 +195,24 @@ $("soundGateBtn").addEventListener("click", () => {
 // の変化も見ることでセッションの切り替わりを検知する(sessionId自体は/negotiate-message等が
 // 知っていれば操作できてしまうため、投影ページ経由で不特定多数に晒す新しい公開項目にはしない)。
 let lastRenderedKey = null;
+// チャイムを鳴らすかどうかの判定用(同じ人の会話が伸びた時だけ鳴らし、新しい人に
+// 切り替わった直後の初回描画では鳴らさない、というのをlastRenderedKeyとは別に管理する)。
+let chimeWallet = null;
+let chimeChatLength = 0;
 
 function renderTranscript(wallet, transcript) {
   const key = `${wallet}:${transcript.length}`;
   if (key === lastRenderedKey) return;
   lastRenderedKey = key;
+
+  if (wallet !== chimeWallet) {
+    chimeWallet = wallet;
+    chimeChatLength = 0;
+  } else if (transcript.length > chimeChatLength) {
+    playChime();
+  }
+  chimeChatLength = transcript.length;
+
   const chat = $("chat");
   chat.innerHTML = "";
   for (const m of transcript) {
@@ -240,6 +282,10 @@ setInterval(poll, POLL_MS);
 // (「現地用とオンライン用は完全に別物として扱う」という方針、既存のpoll()は無変更)。
 const REVEAL_DISPLAY_MS = 7000; // 1件あたりの当選演出の表示時間
 
+// オンラインタイルの新着チャット判定用(displayNameをキーに、直前のlastMessageを覚えておく)。
+// sessionIdは投影ページには公開していないため、表示名で近似する。
+const onlineChimeLastMessage = new Map();
+
 function renderOnlineTiles(sessions) {
   const panel = $("onlinePanel");
   if (!sessions.length) {
@@ -250,6 +296,13 @@ function renderOnlineTiles(sessions) {
   const container = $("onlineTiles");
   container.innerHTML = "";
   for (const s of sessions) {
+    // 前回のポーリングと発言が変わっていれば新着とみなす(タイルが初めて現れた
+    // 瞬間(このdisplayNameを初めて見た時)は鳴らさない)。
+    if (onlineChimeLastMessage.has(s.displayName)) {
+      if (onlineChimeLastMessage.get(s.displayName) !== s.lastMessage) playChime();
+    }
+    onlineChimeLastMessage.set(s.displayName, s.lastMessage);
+
     const tile = document.createElement("div");
     tile.className = "onlineTile";
     const statusLabel = s.status === "awaiting-payment" ? `${s.price} ICHIGOで確定・支払い待ち`

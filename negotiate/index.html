@@ -352,12 +352,29 @@ function playFanfare() {
 const bgmAudio = new Audio("assets/bgm.mp3");
 bgmAudio.loop = true;
 bgmAudio.volume = 0.35;
-let bgmStarted = false;
-function startBgmIfNeeded() {
-  if (bgmStarted || soundMuted) return;
-  bgmStarted = true;
-  bgmAudio.play().catch(() => { bgmStarted = false; }); // 音源未生成・自動再生ブロック時は静かに諦める
+// 再生開始/再開は常にこの1つの関数だけを通す(以前は「一度も鳴らしていないかどうか」の
+// フラグ(bgmStarted)で再生済みかを判定していたため、ミュート→ミュート解除で
+// 「もう開始済みだから」と判定されて再開しなくなる不具合があった。play()自体は
+// 再生中に呼んでも害が無いので、常にplay()を呼ぶだけの単純な形にする)。
+function playBgm() {
+  if (soundMuted) return;
+  bgmAudio.play().catch(() => {}); // 音源未生成・自動再生ブロック時は静かに諦める(次のユーザー操作で再試行される)
 }
+
+// 「開いたらデフォルトで音が出ていて、消したければ消せる」という要望に対応するため、
+// 特定のボタン(ウォレット接続等)を待たず、このページ内での最初の操作
+// (クリック・タップ・キー入力のいずれか)をきっかけにBGMを開始する。
+// ブラウザの自動再生ブロックは「ユーザー操作が1回もないまま再生開始すること」を
+// 防ぐものなので、ページ内で最初に何か操作された瞬間に鳴らせば「開いたらすぐ音が出る」
+// にほぼ近い体感になる。
+function startBgmOnFirstInteraction() {
+  const start = () => {
+    playBgm();
+    ["pointerdown", "keydown", "touchstart"].forEach((ev) => document.removeEventListener(ev, start));
+  };
+  ["pointerdown", "keydown", "touchstart"].forEach((ev) => document.addEventListener(ev, start));
+}
+startBgmOnFirstInteraction();
 
 function updateSoundToggleUI() {
   $("soundToggleBtn").textContent = soundMuted ? "🔇" : "🔊";
@@ -370,7 +387,7 @@ $("soundToggleBtn").addEventListener("click", () => {
     bgmAudio.pause();
   } else {
     getAudioCtx();
-    startBgmIfNeeded();
+    playBgm(); // 消してからもう一度点けた時に、確実に再生を再開させる
   }
 });
 updateSoundToggleUI();
@@ -978,7 +995,7 @@ $("connectBtn").addEventListener("click", async () => {
   // このクリックが、ブラウザの自動再生ブロックを解除できる確実なユーザー操作。
   // ここでAudioContextを起動し、カチッ音とBGMを鳴らし始める。
   playClickSound();
-  startBgmIfNeeded();
+  playBgm();
   if (!window.ethereum) {
     // QRコードをスマホの標準カメラ/ブラウザ(Safari・Chrome等)で開いた場合、
     // window.ethereumは注入されない(MetaMaskアプリの中のブラウザでしか使えない)。
