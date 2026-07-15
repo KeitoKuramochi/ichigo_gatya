@@ -91,6 +91,21 @@
   .onlineTile .onlineTilePrice { color: #fff8ee; font-size: 1.2rem; font-weight: 700; }
   .onlineTile .onlineTileMsg { color: #ddd; font-size: 1.05rem; margin-top: 10px; line-height: 1.5; white-space: pre-wrap; }
 
+  /* ==== 音のオン/オフ(2026-07-16追加) ====
+     negotiate/online/paymentと同じ、常時表示のオン/オフボタン。設営時の
+     soundGate(1回タップ)はブラウザの自動再生ブロック解除のために必須のまま残すが、
+     それ以降はこのボタンでいつでもミュート/再生を切り替えられるようにする。
+     このページはカード状のレイアウトではなく画面全体を使うので、他ページのような
+     「カードの右端」を計算する必要は無く、素直にviewportの角に固定してよい。 */
+  .soundToggleBtn {
+    position: fixed; top: 12px; right: 12px; z-index: 20;
+    width: 44px; height: 44px; padding: 0; border-radius: 50%; border: none;
+    background: rgba(224,178,92,.85); color: #2b2118; font-size: 1.3rem; cursor: pointer;
+    box-shadow: 0 2px 6px rgba(0,0,0,.4);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .soundToggleBtn:active { transform: translateY(1px); }
+
   /* ==== オンライン当選演出(現地のcompletedViewとは別の見た目にして混同を防ぐ) ==== */
   #revealToast {
     position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
@@ -107,6 +122,7 @@
 </style>
 </head>
 <body>
+  <button id="soundToggleBtn" class="soundToggleBtn" type="button" aria-label="音のオン・オフ切り替え">🔊</button>
   <div id="soundGate" class="soundGate">
     <button id="soundGateBtn" class="soundGateBtn" type="button">🔈 音声を有効にする(設営時に1回タップ)</button>
   </div>
@@ -152,11 +168,13 @@
 const POLL_MS = 2000;
 const $ = (id) => document.getElementById(id);
 
-// ==== BGM ====
+// ==== 音(BGM・新着チャットの通知音) ====
 // お祭りっぽいループ音源(assets/bgm.mp3)を投影画面側でも流す。設営時にスタッフが
-// オーバーレイをタップするまでは自動再生ブロックで鳴らせないため、その1回のタップを
-// 待ってから開始する。音源が未生成/再生に失敗した場合はcatchで握りつぶし、
-// 投影自体は通常通り動作させる。
+// オーバーレイを1回タップするまでは自動再生ブロックで鳴らせないため、その1回の
+// タップで解禁してから開始する。以後はnegotiate/online/paymentと同じ、常時表示の
+// オン/オフボタンでいつでも切り替えられる。
+const SOUND_MUTE_KEY = "ichigo_spectator_sound_muted";
+let soundMuted = localStorage.getItem(SOUND_MUTE_KEY) === "1";
 const bgmAudio = new Audio("assets/bgm.mp3");
 bgmAudio.loop = true;
 bgmAudio.volume = 0.3;
@@ -166,16 +184,37 @@ function getAudioCtx() {
   if (audioCtx.state === "suspended") audioCtx.resume();
   return audioCtx;
 }
+// 再生開始/再開は常にこの関数だけを通す(「一度も鳴らしていないか」フラグでは
+// ミュート解除時に再開しない不具合が他ページで見つかったため、同じ轍を踏まないようにする)。
+function playBgm() {
+  if (soundMuted) return;
+  bgmAudio.play().catch(() => {}); // 音源未生成・自動再生ブロック時は静かに諦める
+}
+function updateSoundToggleUI() {
+  $("soundToggleBtn").textContent = soundMuted ? "🔇" : "🔊";
+}
 $("soundGateBtn").addEventListener("click", () => {
-  bgmAudio.play().catch(() => {});
   getAudioCtx(); // 新着チャットの通知音(下記)も、この最初のタップでまとめて解禁しておく
+  playBgm();
   $("soundGate").classList.add("hidden");
 });
+$("soundToggleBtn").addEventListener("click", () => {
+  soundMuted = !soundMuted;
+  localStorage.setItem(SOUND_MUTE_KEY, soundMuted ? "1" : "0");
+  updateSoundToggleUI();
+  if (soundMuted) {
+    bgmAudio.pause();
+  } else {
+    getAudioCtx();
+    playBgm(); // 消してからもう一度点けた時に、確実に再生を再開させる
+  }
+});
+updateSoundToggleUI();
 
 // ==== 新着チャットの通知音 ====
 // この投影画面は会場で1番人目につく場所なので、新しい発言が来たことに気付きやすいように
 // 短いチャイムを鳴らす(外部音源は持たず、negotiate/index.htmlと同様にオシレーターで
-// その場で合成する)。
+// その場で合成する)。ミュート中は鳴らさない。
 function chimeBeep({ freq, durationMs, delayMs = 0 }) {
   const ctx = getAudioCtx();
   const t0 = ctx.currentTime + delayMs / 1000;
@@ -190,6 +229,7 @@ function chimeBeep({ freq, durationMs, delayMs = 0 }) {
   osc.stop(t0 + durationMs / 1000 + 0.02);
 }
 function playChime() {
+  if (soundMuted) return;
   chimeBeep({ freq: 784, durationMs: 120 });
   chimeBeep({ freq: 1046.5, durationMs: 160, delayMs: 90 });
 }
