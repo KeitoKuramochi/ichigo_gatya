@@ -29,7 +29,7 @@
     --font-body: 'Zen Maru Gothic', system-ui, sans-serif;
   }
   * { box-sizing: border-box; }
-  html { background: var(--indigo-deep); }
+  html { background: var(--indigo-deep); overflow-x: hidden; }
   :root { --card-width: 480px; } /* 音量ボタン等の位置計算(下記)にも使う */
   body {
     font-family: var(--font-body); margin: 0; color: var(--ink);
@@ -138,17 +138,22 @@
   .howStep p { margin: 0; font-size: .9rem; }
 
   /* ==== 景品のモザイク/サンプル表示 ====
-     実画像はネタバレになるので見せず、名前とおおよその出現率だけを見せる。
-     カード自体をぼかし気味の見た目にして「まだ見えない」ことを視覚的に伝える。 */
+     完全な絵柄を見せるとネタバレになるので、実画像を強くぼかして「うっすら
+     見える」程度のヒントにとどめ、名前の代わりに出現率だけを見せる。 */
   .prizeGallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0 18px; }
   .prizeCard {
     position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden;
     background: linear-gradient(135deg, var(--indigo), var(--indigo-deep));
     display: flex; align-items: center; justify-content: center; text-align: center;
   }
-  .prizeCard .prizeMosaic { position: absolute; inset: 0; filter: blur(6px); opacity: .55; background: repeating-linear-gradient(45deg, var(--gold) 0 6px, transparent 6px 12px); }
-  .prizeCard .prizeMark { position: relative; font-family: var(--font-display); font-size: 1.6rem; color: var(--gold); }
-  .prizeCard .prizeName { position: absolute; bottom: 4px; left: 4px; right: 4px; font-size: .62rem; color: #fff8ee; background: rgba(0,0,0,.35); border-radius: 4px; padding: 2px 3px; }
+  .prizeCard .prizeMosaic {
+    position: absolute; inset: -8%; width: 116%; height: 116%; object-fit: cover;
+    filter: blur(9px) saturate(1.15);
+  }
+  .prizeCard .prizeShade { position: absolute; inset: 0; background: linear-gradient(160deg, rgba(35,46,68,.4), rgba(35,46,68,.75)); }
+  .prizeCard .prizeMark { position: relative; z-index: 1; font-family: var(--font-display); font-size: 1.6rem; color: var(--gold); text-shadow: 0 2px 6px rgba(0,0,0,.6); }
+  .prizeCard .prizeName { position: absolute; z-index: 1; bottom: 4px; left: 4px; right: 4px; font-size: .62rem; color: #fff8ee; background: rgba(0,0,0,.35); border-radius: 4px; padding: 2px 3px; }
+  .prizeCard.rare { box-shadow: 0 0 0 2px var(--gold), 0 0 12px rgba(224,178,92,.6); }
   .prizeCard.rare .prizeMark { color: #fff2c9; }
   .prizeGalleryNote { font-size: .78rem; color: var(--ink-soft); margin: -10px 0 18px; }
 
@@ -175,8 +180,37 @@
   .spinCharacter { width: 140px; height: 140px; object-fit: contain; animation: spinWobble 0.6s ease-in-out infinite; }
   @keyframes spinWobble { 0%, 100% { transform: rotate(-6deg) scale(1); } 50% { transform: rotate(6deg) scale(1.04); } }
   .prizeReveal { text-align: center; margin: 16px 0; }
+  .prizeRevealImgWrap { position: relative; display: inline-block; }
   .prizeRevealImg { width: 180px; height: 180px; object-fit: contain; border-radius: 14px; background: var(--paper-deep); padding: 10px; }
   .prizeRevealName { font-family: var(--font-display); font-size: 1.4rem; color: var(--vermilion-deep); margin: 10px 0 4px; }
+
+  /* ==== 手描きスペシャル当選演出(ゴージャス版) ==== */
+  .specialBadge {
+    display: inline-block; font-family: var(--font-display); font-weight: 800; font-size: 1rem;
+    background: linear-gradient(120deg, #fdf1cf, var(--gold), #fdf1cf);
+    background-size: 200% auto; -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: specialShimmer 2.4s linear infinite; margin-bottom: 6px;
+  }
+  @keyframes specialShimmer { 0% { background-position: 0% center; } 100% { background-position: 200% center; } }
+  .prizeReveal--special .prizeRevealImg {
+    width: 220px; height: 220px; border: 3px solid var(--gold);
+    animation: specialGlow 1.8s ease-in-out infinite;
+  }
+  @keyframes specialGlow {
+    0%, 100% { box-shadow: 0 0 0 6px rgba(224,178,92,.25), 0 0 40px rgba(224,178,92,.55); }
+    50% { box-shadow: 0 0 0 10px rgba(224,178,92,.4), 0 0 62px rgba(224,178,92,.85); }
+  }
+  .prizeReveal--special .prizeRevealName { color: var(--gold); }
+  .specialSparkle { display: none; position: absolute; font-size: 1.3rem; pointer-events: none; animation: sparklePop 1.7s ease-in-out infinite; }
+  .prizeReveal--special .specialSparkle { display: block; }
+  .specialSparkle--1 { top: -10px; left: -14px; animation-delay: 0s; }
+  .specialSparkle--2 { top: -6px; right: -18px; animation-delay: .4s; }
+  .specialSparkle--3 { bottom: -12px; left: -8px; animation-delay: .8s; }
+  .specialSparkle--4 { bottom: -14px; right: -10px; animation-delay: 1.2s; }
+  @keyframes sparklePop {
+    0%, 100% { opacity: 0; transform: scale(.4) rotate(0deg); }
+    50% { opacity: 1; transform: scale(1.15) rotate(20deg); }
+  }
 
   .receipt { position: relative; border: 2px solid var(--indigo); border-radius: 12px; padding: 18px; margin: 16px 0; background: var(--paper-deep); }
   .receiptStamp { position: absolute; top: -18px; right: -8px; width: 66px; height: 66px; pointer-events: none; transform: rotate(8deg); }
@@ -274,8 +308,15 @@
     </div>
 
     <div id="revealSection" class="hidden">
-      <div class="prizeReveal">
-        <img id="prizeRevealImg" class="prizeRevealImg" src="" alt="">
+      <div class="prizeReveal" id="prizeRevealBox">
+        <p class="specialBadge hidden" id="prizeRevealBadge">✨ れのあ直筆 ✨</p>
+        <div class="prizeRevealImgWrap">
+          <span class="specialSparkle specialSparkle--1">✨</span>
+          <span class="specialSparkle specialSparkle--2">✨</span>
+          <span class="specialSparkle specialSparkle--3">✨</span>
+          <span class="specialSparkle specialSparkle--4">✨</span>
+          <img id="prizeRevealImg" class="prizeRevealImg" src="" alt="">
+        </div>
         <p class="prizeRevealName" id="prizeRevealName"></p>
         <p class="muted">おめでとうございます!記念画像をお受け取りください。</p>
       </div>
@@ -286,8 +327,15 @@
       <h2 id="receiptTitle"></h2>
       <p class="receiptRow">お支払い <span class="priceTag"><strong id="receiptPriceLabel"></strong> <span class="unit">ICHIGO</span></span></p>
       <p class="receiptRow muted" id="receiptTimeLabel"></p>
-      <div class="prizeReveal">
-        <img id="receiptPrizeImg" class="prizeRevealImg" src="" alt="">
+      <div class="prizeReveal" id="receiptPrizeBox">
+        <p class="specialBadge hidden" id="receiptPrizeBadge">✨ れのあ直筆 ✨</p>
+        <div class="prizeRevealImgWrap">
+          <span class="specialSparkle specialSparkle--1">✨</span>
+          <span class="specialSparkle specialSparkle--2">✨</span>
+          <span class="specialSparkle specialSparkle--3">✨</span>
+          <span class="specialSparkle specialSparkle--4">✨</span>
+          <img id="receiptPrizeImg" class="prizeRevealImg" src="" alt="">
+        </div>
         <p class="prizeRevealName" id="receiptPrizeName"></p>
         <a id="receiptPrizeDownload" class="secondaryBtn btnAnchor" href="" download><span class="iconBadge"><img class="btnIcon" src="assets/icon-decide.png" alt=""></span>画像を保存</a>
       </div>
@@ -427,7 +475,7 @@ function setCharacterImage(state) {
   el.src = src;
 }
 
-// 景品のモザイク/サンプル表示。実画像URLは/prize-pool-teaserに含まれない(ネタバレ防止)。
+// 景品のモザイク/サンプル表示。実画像を強くぼかして「うっすら見える」ヒントにする(完全な絵柄は見せない)。
 async function loadPrizeGallery() {
   try {
     const res = await fetch("/prize-pool-teaser");
@@ -439,7 +487,8 @@ async function loadPrizeGallery() {
       const card = document.createElement("div");
       card.className = "prizeCard" + (prize.rarityPercent <= 15 ? " rare" : "");
       card.innerHTML = `
-        <div class="prizeMosaic"></div>
+        <img class="prizeMosaic" src="/nft-images/${prize.image}" alt="" loading="lazy">
+        <div class="prizeShade"></div>
         <div class="prizeMark">?</div>
         <div class="prizeName">${prize.rarityPercent}%</div>
       `;
@@ -631,6 +680,8 @@ function showPrizeReveal(prize, txHash) {
   currentPrize = prize;
   $("prizeRevealImg").src = `/nft-images/${prize.image}`;
   $("prizeRevealName").textContent = prize.name;
+  $("prizeRevealBox").classList.toggle("prizeReveal--special", !!prize.special);
+  $("prizeRevealBadge").classList.toggle("hidden", !prize.special);
   $("revealSection").classList.remove("hidden");
   setCharacterImage("thanks");
 
@@ -665,6 +716,8 @@ function renderReceipt(receipt) {
   $("receiptTimeLabel").textContent = "支払い時刻: " + new Date(receipt.paidAt).toLocaleString("ja-JP");
   $("receiptPrizeImg").src = `/nft-images/${receipt.prize.image}`;
   $("receiptPrizeName").textContent = receipt.prize.name;
+  $("receiptPrizeBox").classList.toggle("prizeReveal--special", !!receipt.prize.special);
+  $("receiptPrizeBadge").classList.toggle("hidden", !receipt.prize.special);
   $("receiptPrizeDownload").href = `/nft-images/${receipt.prize.image}`;
   $("receiptPrizeDownload").download = receipt.prize.image;
   $("receiptTxHashLabel").classList.toggle("hidden", !receipt.txHash);

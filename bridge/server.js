@@ -1337,14 +1337,14 @@ app.post('/online-verify-and-claim', async (req, res) => {
     onlineReveals.push({
       sessionId,
       displayName: session.displayName || maskWallet(session.wallet),
-      prize: { id: prize.id, name: prize.name, image: prize.image },
+      prize: { id: prize.id, name: prize.name, image: prize.image, special: prize.special || false },
       revealedAt: Date.now(),
     });
 
     return res.json({
       ok: true,
       txHash,
-      prize: { id: prize.id, name: prize.name, image: prize.image },
+      prize: { id: prize.id, name: prize.name, image: prize.image, special: prize.special || false },
     });
   } catch (err) {
     console.error('online-verify-and-claim処理中にエラー:', err);

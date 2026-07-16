@@ -10,7 +10,8 @@ export const PRIZE_POOL = [
   { id: 4, name: "いちごクラウン(仮)", weight: 18, image: "prize-4.png" },
   { id: 5, name: "いちごスター(仮)", weight: 18, image: "prize-5.png" },
   // 手描きイラスト枠。合計100のうち10 = 10%の低確率(何度でも出うる、一点物ではない)。
-  { id: 6, name: "てがきスペシャル(仮)", weight: 10, image: "prize-6-special.png" },
+  // specialフラグでフロント側にゴージャスな当たり演出を出させる。
+  { id: 6, name: "れのあ直筆スペシャル", weight: 10, image: "prize-6-special.png", special: true },
 ];
 
 /**
@@ -34,12 +35,14 @@ export function pickPrize(pool = PRIZE_POOL) {
   return pool[pool.length - 1]; // 念のための保険(整数演算なので本来ここには来ない)
 }
 
-/** オンラインページの「サンプル/モザイク表示」用。実画像URLは含めない(ネタバレ防止)。 */
+/** オンラインページの「サンプル/モザイク表示」用。完全な絵柄はネタバレになるので、
+ * 画像自体はフロント側でぼかして見せる前提でファイル名だけ返す。 */
 export function getPrizeTeasers(pool = PRIZE_POOL) {
   const total = pool.reduce((sum, p) => sum + p.weight, 0);
   return pool.map((p) => ({
     id: p.id,
     name: p.name,
+    image: p.image,
     rarityPercent: Math.round((p.weight / total) * 100),
   }));
 }
