@@ -106,6 +106,18 @@
   }
   .soundToggleBtn:active { transform: translateY(1px); }
 
+  /* ==== 参加用QR(常時・画面上部中央に表示、2026-07-16追加) ====
+     投影された会場のどこからでも気付いてスキャンできるよう、表示状態(待機中/
+     交渉中/完了)に関わらず常に画面上部中央に固定する。 */
+  .qrJoinBox {
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 20;
+    background: #fff8ee; border-radius: 14px; padding: 10px 12px 8px;
+    box-shadow: 0 6px 22px rgba(0,0,0,.5); border: 3px solid var(--gold);
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+  }
+  .qrJoinBox img { width: 150px; height: 150px; display: block; }
+  .qrJoinBox p { margin: 0; font-family: 'Zen Maru Gothic', system-ui, sans-serif; font-size: .85rem; font-weight: 700; color: #2b2118; }
+
   /* ==== オンライン当選演出(現地のcompletedViewとは別の見た目にして混同を防ぐ) ==== */
   #revealToast {
     position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
@@ -123,6 +135,10 @@
 </head>
 <body>
   <button id="soundToggleBtn" class="soundToggleBtn" type="button" aria-label="音のオン・オフ切り替え">🔊</button>
+  <div class="qrJoinBox">
+    <img src="assets/qr-join.png" alt="参加用QRコード">
+    <p>スキャンして参加</p>
+  </div>
   <div id="soundGate" class="soundGate">
     <button id="soundGateBtn" class="soundGateBtn" type="button">🔈 音声を有効にする(設営時に1回タップ)</button>
   </div>
