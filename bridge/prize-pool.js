@@ -4,14 +4,15 @@ import { randomInt } from "node:crypto";
 // その場で見せる/保存させるだけ(id/weight/画像の差し替えは自由)。
 // image は bridge/nft-images/ 以下のファイル名(実画像が用意でき次第、プレースホルダーから差し替える)。
 export const PRIZE_POOL = [
-  { id: 1, name: "いちごほし(仮)", weight: 18, image: "prize-1.png" },
-  { id: 2, name: "いちごつぶ(仮)", weight: 18, image: "prize-2.png" },
-  { id: 3, name: "いちごリボン(仮)", weight: 18, image: "prize-3.png" },
-  { id: 4, name: "いちごクラウン(仮)", weight: 18, image: "prize-4.png" },
-  { id: 5, name: "いちごスター(仮)", weight: 18, image: "prize-5.png" },
+  { id: 1, name: "決戦!!!!?", weight: 18, image: "prize-1.png" },
+  { id: 2, name: "明日への扉(激エモ)", weight: 18, image: "prize-2.png" },
+  { id: 3, name: "いちご軍の侵略", weight: 18, image: "prize-3.png" },
+  { id: 4, name: "あったかペンギンおちえく", weight: 18, image: "prize-4.png" },
+  { id: 5, name: "いちごいっぱい嬉しいね", weight: 18, image: "prize-5.png" },
   // 手描きイラスト枠。合計100のうち10 = 10%の低確率(何度でも出うる、一点物ではない)。
+  // 4Kの壁紙品質イラストで、そのまま保存してPCの壁紙にできる想定(圧縮・加工しない)。
   // specialフラグでフロント側にゴージャスな当たり演出を出させる。
-  { id: 6, name: "れのあ直筆スペシャル", weight: 10, image: "prize-6-special.png", special: true },
+  { id: 6, name: "エクストリームweb3おちれの", weight: 10, image: "prize-6-special.png", special: true },
 ];
 
 /**
