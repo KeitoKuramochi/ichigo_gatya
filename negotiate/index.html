@@ -145,20 +145,26 @@
   .bubble { max-width: 80%; margin: 6px 0; padding: 8px 13px; border-radius: 14px; font-size: .95rem; line-height: 1.45; white-space: pre-wrap; }
   .bubble.user { margin-left: auto; background: var(--vermilion); color: #fff8ee; border-bottom-right-radius: 4px; }
   .bubble.assistant { margin-right: auto; background: var(--paper-deep); color: var(--ink); border-bottom-left-radius: 4px; }
-  .chatInputRow { display: flex; gap: 8px; margin-bottom: 8px; }
-  .chatInputRow input { flex: 1; }
+  /* 日本語は文字間どこでも改行できてしまうため、ボタン側がflexの既定の縮小
+     (flex-shrink:1・min-width:auto)に巻き込まれると、横幅が狭い画面で
+     ボタンの内容幅が1文字分まで潰れ、ラベルが1文字ずつ縦に折り返ってしまう
+     不具合があった。ボタン自体は縮ませない・改行させない(nowrap)ようにして
+     解決したが、それだけだと今度は逆に、input側がこれ以上縮めない
+     (テキスト入力欄の既定のmin-widthはautoで、ブラウザが決める最小幅より
+     縮まない)ほど画面が狭い場合に、ボタンが行からはみ出して右に隠れて
+     しまう(横スクロールしないと押せない)不具合が別途起きていた。
+     flex-wrap:wrapで行全体の折り返しを許可し、inputにmin-width:0を与えて
+     「まずinputが十分縮む→それでも足りなければボタンが丸ごと次の行に
+     落ちる」の順で対応させることで、文字単位の折り返し・画面外へのはみ出し
+     のどちらも起きないようにする。 */
+  .chatInputRow, .nameRow { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+  .nameRow { margin: 8px 0; }
+  .chatInputRow input, .nameRow input { flex: 1 1 140px; min-width: 0; }
   input[type="text"] {
     font-family: var(--font-body); font-size: 1rem; padding: 9px 12px; border-radius: 10px;
     border: 1px solid rgba(43,33,24,.25); background: #fffcf4; color: var(--ink);
   }
   .priceLine { font-size: 1rem; font-weight: 500; margin: 10px 0; }
-  .nameRow { display: flex; gap: 8px; margin: 8px 0; }
-  .nameRow input { flex: 1; }
-  /* 日本語は文字間どこでも改行できてしまうため、横幅が狭い画面ではflexの
-     縮小(既定のflex-shrink:1・min-width:auto)でボタンの内容幅が1文字分まで
-     潰れ、ラベルが1文字ずつ縦に折り返ってしまう(結果、隣のinputまで
-     つられて縦長になる)不具合があった。ボタン側を縮ませない・改行させない
-     ことで、狭い分は隣のinput(flex:1)側だけが縮むようにする。 */
   .nameRow button, .chatInputRow button { flex-shrink: 0; white-space: nowrap; }
 
   /* ==== レシート ==== */
