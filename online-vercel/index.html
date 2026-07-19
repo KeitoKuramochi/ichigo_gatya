@@ -1,0 +1,1053 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ICHIGOガチャガチャ 延長戦</title>
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600;800&family=Zen+Maru+Gothic:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.2/ethers.umd.min.js"
+        integrity="sha512-f+t6//rz3Iy3hp1CiwtsigYtyWuGk7bf6xl2RTOPvmyMIfTQJ4iy6Lg1dah1bsLQ9SLideJGicgmOkBsBXP1aA=="
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<style>
+  /* デザイントークンはnegotiate/index.htmlと共通(コピー、要件通り「デザインは一緒」)。 */
+  :root {
+    --paper: #f3e7d2;
+    --paper-deep: #e9dab8;
+    --ink: #2b2118;
+    --ink-soft: #7a6a54;
+    --vermilion: #c1402e;
+    --vermilion-deep: #8f2f20;
+    --indigo: #33415c;
+    --indigo-deep: #232e44;
+    --wood-light: #a9784a;
+    --wood-dark: #5b3a20;
+    --gold: #e0b25c;
+    --font-display: 'Shippori Mincho', serif;
+    --font-body: 'Zen Maru Gothic', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--indigo-deep); overflow-x: hidden; }
+  :root { --card-width: 480px; } /* 音量ボタン等の位置計算(下記)にも使う */
+  body {
+    font-family: var(--font-body); margin: 0; color: var(--ink);
+    overflow-wrap: break-word;
+    min-height: 100vh;
+  }
+  /* ==== レスポンシブな背景配置(2026-07-16追加) ====
+     オンライン参加者はスマホのQR経由ではなくPCで開く人が多いと想定される。
+     スマホ幅ではこれまで通り(スマホ版の見た目そのまま、下のメディアクエリは
+     min-widthなので狭い画面には一切影響しない)。ある程度広い画面(デスクトップ)
+     では、スマホ用の480px幅カードをそのまま伸ばして縦長にするのではなく、
+     カードそのものを中サイズまで広げて画面を使い、周囲に舞台らしい背景
+     (藍色のグラデーション)を敷く「PC版の配置」にする。 */
+  .appShell {
+    max-width: var(--card-width); margin: 0 auto;
+    background: var(--paper) url(assets/paper-texture-tile.jpg);
+    background-size: 340px 340px;
+  }
+  @media (min-width: 720px) {
+    :root { --card-width: 760px; }
+    body {
+      display: flex; justify-content: center; padding: 48px 20px;
+      background: radial-gradient(circle at 50% -10%, var(--indigo) 0%, var(--indigo-deep) 60%) fixed;
+    }
+    .appShell {
+      border-radius: 22px; overflow: hidden;
+      box-shadow: 0 24px 70px rgba(0,0,0,.5);
+    }
+    /* 縦に積むだけだとカードが広がった分だけ間延びして見えるため、
+       使い方ステップと景品ギャラリーは横に並べて画面幅を積極的に使う。 */
+    .howItWorks { flex-direction: row; }
+    .howStep { flex-direction: column; text-align: center; align-items: center; }
+    .prizeGallery { grid-template-columns: repeat(6, 1fr); }
+  }
+  .page { padding: 0 18px 40px; }
+
+  .stallHero { position: relative; overflow: hidden; background: var(--indigo-deep); line-height: 0; }
+  .stallScene { display: block; width: 100%; height: auto; }
+  .stallShade { position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(20,14,10,0) 55%, rgba(15,10,8,.62) 100%); }
+  .stallSign { position: absolute; top: 1%; left: 50%; transform: translateX(-50%) rotate(-1.2deg); width: 56%; z-index: 3; }
+  .signImg { display: block; width: 100%; height: auto; filter: drop-shadow(0 10px 10px rgba(0,0,0,.5)); }
+  .stallCharacter { position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); width: 46%; z-index: 2; }
+  .characterImg {
+    width: 100%; height: auto; object-fit: contain; display: block; transition: opacity .2s ease;
+    transform-origin: bottom center; animation: gentleSway 4.5s ease-in-out infinite;
+  }
+  @keyframes gentleSway { 0%, 100% { transform: rotate(-1.8deg); } 50% { transform: rotate(1.8deg); } }
+
+  .counterLedge { height: 15px; background: linear-gradient(180deg, var(--wood-light) 0%, var(--wood-dark) 100%); box-shadow: inset 0 2px 0 rgba(255,255,255,.22), 0 3px 6px rgba(0,0,0,.35); }
+  .counterLedge--thin { height: 6px; margin: 22px 0 16px; border-radius: 3px; opacity: .85; }
+
+  .lead { font-size: .95rem; color: var(--ink-soft); margin: 16px 0 14px; }
+  h2 { font-family: var(--font-display); }
+  h3 { font-family: var(--font-display); font-size: 1.05rem; margin: 0 0 8px; }
+
+  button, .btnAnchor {
+    font-family: var(--font-body); font-size: 1rem; font-weight: 700; padding: 11px 18px;
+    border-radius: 10px; border: none; background: var(--vermilion); color: #fff8ee; cursor: pointer;
+    box-shadow: 0 3px 0 var(--vermilion-deep), 0 4px 8px rgba(0,0,0,.18);
+    display: inline-flex; align-items: center; justify-content: center; text-decoration: none;
+  }
+  button:active, .btnAnchor:active { transform: translateY(2px); box-shadow: 0 1px 0 var(--vermilion-deep), 0 2px 4px rgba(0,0,0,.18); }
+  button:disabled { background: #cec2ab; color: #8c7f68; box-shadow: none; cursor: default; }
+  .iconBadge {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 1.6em; height: 1.6em; margin-right: 8px; vertical-align: middle;
+    background: #fff8ee; border-radius: 50%; overflow: hidden;
+    box-shadow: 0 1px 2px rgba(0,0,0,.3);
+  }
+  .iconBadge .btnIcon { width: 100%; height: 100%; object-fit: cover; transform: scale(1.7); }
+  .secondaryBtn { background: var(--ink-soft); box-shadow: 0 3px 0 #55483a, 0 4px 8px rgba(0,0,0,.18); }
+  .secondaryBtn:active { box-shadow: 0 1px 0 #55483a, 0 2px 4px rgba(0,0,0,.18); }
+
+  .priceTag, .balance {
+    position: relative; display: inline-block;
+    font-family: var(--font-display); font-weight: 800; font-size: 1.1rem;
+    color: var(--vermilion-deep); background: var(--paper-deep);
+    border: 1px solid rgba(43,33,24,.22);
+    border-radius: 4px 13px 4px 13px;
+    padding: 4px 16px 4px 20px;
+    transform: rotate(-1.5deg);
+    box-shadow: 2px 3px 0 rgba(43,33,24,.12);
+  }
+  .priceTag::before, .balance::before {
+    content: ""; position: absolute; left: 7px; top: 50%; transform: translateY(-50%);
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--paper); box-shadow: inset 0 0 0 1px rgba(43,33,24,.35);
+  }
+  .priceTag .unit { font-family: var(--font-body); font-weight: 500; font-size: .68em; color: var(--ink-soft); margin-left: 3px; }
+  .balance:empty { display: none; }
+  .priceTag--big { font-size: 1.5rem; }
+  .turnBadge { color: var(--ink-soft); font-size: .85rem; margin-left: 8px; }
+
+  .muted { color: var(--ink-soft); font-size: .85rem; }
+  .ok { color: #3f7a4f; }
+  .err { color: #b3392a; white-space: pre-wrap; }
+  /* !important必須: .specialBadge等、後方で.displayを再定義するクラスと同じ要素に
+     同時に付く(class="specialBadge hidden"のように)ケースがあり、CSSの詳細度が同じ
+     単一クラス同士だと後方の定義が勝ってしまう(=hiddenのはずが表示され続ける)ため。
+     実際に手描きスペシャルの当選バッジが毎回表示されてしまう不具合として発覚した。 */
+  .hidden { display: none !important; }
+
+  /* ==== 使い方の3ステップ ==== */
+  .howItWorks { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 20px; }
+  .howStep { display: flex; align-items: flex-start; gap: 10px; background: var(--paper-deep); border-radius: 10px; padding: 10px 12px; }
+  .howStep .stepNum {
+    flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%; background: var(--vermilion); color: #fff8ee;
+    display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 800;
+  }
+  .howStep p { margin: 0; font-size: .9rem; }
+
+  /* ==== 景品のモザイク/サンプル表示 ====
+     完全な絵柄を見せるとネタバレになるので、実画像を強くぼかして「うっすら
+     見える」程度のヒントにとどめ、名前の代わりに出現率だけを見せる。 */
+  .prizeGallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0 18px; }
+  .prizeCard {
+    position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden;
+    background: linear-gradient(135deg, var(--indigo), var(--indigo-deep));
+    display: flex; align-items: center; justify-content: center; text-align: center;
+  }
+  .prizeCard .prizeMosaic {
+    position: absolute; inset: -8%; width: 116%; height: 116%; object-fit: cover;
+    filter: blur(9px) saturate(1.15);
+  }
+  .prizeCard .prizeShade { position: absolute; inset: 0; background: linear-gradient(160deg, rgba(35,46,68,.4), rgba(35,46,68,.75)); }
+  .prizeCard .prizeMark { position: relative; z-index: 1; font-family: var(--font-display); font-size: 1.6rem; color: var(--gold); text-shadow: 0 2px 6px rgba(0,0,0,.6); }
+  .prizeCard .prizeName { position: absolute; z-index: 1; bottom: 4px; left: 4px; right: 4px; font-size: .62rem; color: #fff8ee; background: rgba(0,0,0,.35); border-radius: 4px; padding: 2px 3px; }
+  .prizeCard.rare { box-shadow: 0 0 0 2px var(--gold), 0 0 12px rgba(224,178,92,.6); }
+  .prizeCard.rare .prizeMark { color: #fff2c9; }
+  .prizeGalleryHighlight {
+    font-size: .88rem; color: var(--vermilion-deep); background: var(--paper-deep);
+    border-radius: 8px; padding: 8px 12px; margin: -6px 0 6px;
+  }
+  .prizeGalleryHighlight strong { color: var(--vermilion); }
+  .prizeGalleryNote { font-size: .78rem; color: var(--ink-soft); margin: 0 0 18px; }
+
+  .chat {
+    border: 1px solid rgba(43,33,24,.18); border-radius: 10px; padding: 10px; height: 300px; overflow-y: auto; margin: 12px 0;
+    background: linear-gradient(rgba(250,245,232,.82), rgba(250,245,232,.82)), url(assets/ichigoban-thinking.png) center/contain no-repeat;
+  }
+  .bubble { max-width: 80%; margin: 6px 0; padding: 8px 13px; border-radius: 14px; font-size: .95rem; line-height: 1.45; white-space: pre-wrap; }
+  .bubble.user { margin-left: auto; background: var(--vermilion); color: #fff8ee; border-bottom-right-radius: 4px; }
+  .bubble.assistant { margin-right: auto; background: var(--paper-deep); color: var(--ink); border-bottom-left-radius: 4px; }
+  .chatInputRow { display: flex; gap: 8px; margin-bottom: 8px; }
+  .chatInputRow input { flex: 1; }
+  input[type="text"] {
+    font-family: var(--font-body); font-size: 1rem; padding: 9px 12px; border-radius: 10px;
+    border: 1px solid rgba(43,33,24,.25); background: #fffcf4; color: var(--ink);
+  }
+  .priceLine { font-size: 1rem; font-weight: 500; margin: 10px 0; }
+  .nameRow { display: flex; gap: 8px; margin: 8px 0; }
+  .nameRow input { flex: 1; }
+  .nameRow button, .chatInputRow button { flex-shrink: 0; white-space: nowrap; }
+
+  /* ==== ガチャ演出・景品お披露目 ==== */
+  .spinStage { text-align: center; margin: 20px 0; }
+  .spinCharacter { width: 140px; height: 140px; object-fit: contain; animation: spinWobble 0.6s ease-in-out infinite; }
+  @keyframes spinWobble { 0%, 100% { transform: rotate(-6deg) scale(1); } 50% { transform: rotate(6deg) scale(1.04); } }
+  .spinLabel { font-weight: 500; }
+  /* 送金検証中に回り続けるハンドル(ガチャの「回している」感を出す) */
+  .gachaKnob {
+    width: 72px; height: 72px; margin: 6px auto 0; border-radius: 50%; position: relative;
+    background: radial-gradient(circle at 34% 30%, #d9584422, transparent 55%), var(--vermilion);
+    border: 6px solid var(--vermilion-deep);
+    animation: knobTurn 1.3s cubic-bezier(.65,.05,.36,1) infinite;
+    box-shadow: 0 3px 8px rgba(0,0,0,.25);
+  }
+  .gachaKnob::after {
+    content: ""; position: absolute; left: 50%; top: 7%; width: 13px; height: 86%;
+    transform: translateX(-50%); background: #fff8ee; border-radius: 7px; opacity: .92;
+  }
+  @keyframes knobTurn { to { transform: rotate(360deg); } }
+
+  /* ==== カプセルが落ちて割れる演出 ====
+     検証OK・景品判明後に再生する。special(直筆)のときは途中でカプセルが金色に
+     変わり光る「確定演出」(.capsuleStage--special)に切り替わる。 */
+  .capsuleStage { position: relative; height: 250px; overflow: hidden; }
+  .kakuteiRays {
+    display: none; position: absolute; left: 50%; top: 124px; width: 380px; height: 380px;
+    transform: translate(-50%,-50%); border-radius: 50%;
+    background: repeating-conic-gradient(rgba(224,178,92,.3) 0 11deg, transparent 11deg 24deg);
+    animation: raysSpin 7s linear infinite;
+  }
+  @keyframes raysSpin { to { transform: translate(-50%,-50%) rotate(360deg); } }
+  .capsuleStage--special { background: radial-gradient(circle at 50% 52%, rgba(224,178,92,.32), transparent 62%); }
+  .capsuleStage--special .kakuteiRays { display: block; }
+  .spinSparkle { display: none; position: absolute; font-size: 1.5rem; pointer-events: none; animation: sparklePop 1.7s ease-in-out infinite; }
+  .capsuleStage--special .spinSparkle { display: block; }
+  .spinSparkle--1 { top: 30px; left: 22%; animation-delay: 0s; }
+  .spinSparkle--2 { top: 46px; right: 20%; animation-delay: .4s; }
+  .spinSparkle--3 { bottom: 44px; left: 27%; animation-delay: .8s; }
+  .spinSparkle--4 { bottom: 30px; right: 25%; animation-delay: 1.2s; }
+
+  .capsule { position: absolute; left: 50%; top: 20px; width: 112px; height: 112px; transform: translate(-50%,-320px); filter: drop-shadow(0 6px 8px rgba(0,0,0,.28)); }
+  .capsuleTop {
+    position: absolute; inset: 0 0 50% 0; background: var(--vermilion);
+    border-radius: 112px 112px 0 0; transition: background .4s ease;
+  }
+  .capsuleTop::after { /* ハイライト(照り) */
+    content: ""; position: absolute; left: 18%; top: 22%; width: 26%; height: 30%;
+    background: rgba(255,248,238,.55); border-radius: 50%; transform: rotate(-24deg);
+  }
+  .capsuleBottom {
+    position: absolute; inset: 50% 0 0 0; background: #fff8ee;
+    border-radius: 0 0 112px 112px; transition: background .4s ease;
+    box-shadow: inset 0 3px 0 rgba(43,33,24,.12);
+  }
+  .capsuleStage--special .capsuleTop { background: var(--gold); }
+  .capsuleStage--special .capsuleBottom { background: #fdf1cf; }
+  .capsuleStage--special .capsule { animation: capsuleGlow 1.2s ease-in-out infinite; }
+  @keyframes capsuleGlow {
+    0%, 100% { filter: drop-shadow(0 6px 8px rgba(0,0,0,.28)) drop-shadow(0 0 14px rgba(224,178,92,.75)); }
+    50% { filter: drop-shadow(0 6px 8px rgba(0,0,0,.28)) drop-shadow(0 0 30px rgba(224,178,92,1)); }
+  }
+
+  /* 落下(バウンド付き)。dropクラスは演出中ずっと付けたままにする(forwardsで着地位置を保持) */
+  .capsuleStage.drop .capsule { animation: capsuleDrop .95s ease-in forwards; }
+  .capsuleStage--special.drop .capsule,
+  .capsuleStage--special.drop.shake .capsule { animation-name: capsuleDrop, capsuleGlow; animation-duration: .95s, 1.2s; animation-fill-mode: forwards, none; animation-iteration-count: 1, infinite; }
+  @keyframes capsuleDrop {
+    0% { transform: translate(-50%,-320px); }
+    52% { transform: translate(-50%, 48px); }
+    70% { transform: translate(-50%, 4px); }
+    84% { transform: translate(-50%, 48px); }
+    93% { transform: translate(-50%, 34px); }
+    100% { transform: translate(-50%, 48px); }
+  }
+  .capsuleStage.drop.shake .capsule { animation: capsuleShake .42s ease-in-out infinite; }
+  @keyframes capsuleShake {
+    0%, 100% { transform: translate(-50%, 48px) rotate(0deg); }
+    25% { transform: translate(calc(-50% - 8px), 48px) rotate(-10deg); }
+    75% { transform: translate(calc(-50% + 8px), 48px) rotate(10deg); }
+  }
+  .capsuleStage--special.drop.shake .capsule { animation-duration: .3s; }
+  /* パカッと割れる: 上下半分が飛んでいき、白い閃光が広がる */
+  .capsuleStage.burst .capsuleTop { animation: capTopFly .6s ease-out forwards; }
+  @keyframes capTopFly { to { transform: translate(-52px,-130px) rotate(-42deg); opacity: 0; } }
+  .capsuleStage.burst .capsuleBottom { animation: capBottomFly .6s ease-out forwards; }
+  @keyframes capBottomFly { to { transform: translate(46px,100px) rotate(38deg); opacity: 0; } }
+  .burstFlash {
+    position: absolute; left: 50%; top: 124px; width: 30px; height: 30px; border-radius: 50%;
+    background: radial-gradient(#fff8ee, rgba(255,248,238,0)); opacity: 0; transform: translate(-50%,-50%) scale(0);
+  }
+  .capsuleStage.burst .burstFlash { animation: flashPop .6s ease-out forwards; }
+  .capsuleStage--special .burstFlash { background: radial-gradient(#fff6d8, rgba(232,198,117,0)); }
+  @keyframes flashPop {
+    0% { opacity: .95; transform: translate(-50%,-50%) scale(.2); }
+    100% { opacity: 0; transform: translate(-50%,-50%) scale(11); }
+  }
+  .prizeReveal { text-align: center; margin: 16px 0; }
+  .prizeRevealImgWrap { position: relative; display: inline-block; }
+  .prizeRevealImg { width: 180px; height: 180px; object-fit: contain; border-radius: 14px; background: var(--paper-deep); padding: 10px; }
+  .prizeRevealName { font-family: var(--font-display); font-size: 1.4rem; color: var(--vermilion-deep); margin: 10px 0 4px; }
+
+  /* ==== 手描きスペシャル当選演出(ゴージャス版) ==== */
+  .specialBadge {
+    display: inline-block; font-family: var(--font-display); font-weight: 800; font-size: 1rem;
+    background: linear-gradient(120deg, #fdf1cf, var(--gold), #fdf1cf);
+    background-size: 200% auto; -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: specialShimmer 2.4s linear infinite; margin-bottom: 6px;
+  }
+  @keyframes specialShimmer { 0% { background-position: 0% center; } 100% { background-position: 200% center; } }
+  .prizeReveal--special .prizeRevealImg {
+    width: 220px; height: 220px; border: 3px solid var(--gold);
+    animation: specialGlow 1.8s ease-in-out infinite;
+  }
+  @keyframes specialGlow {
+    0%, 100% { box-shadow: 0 0 0 6px rgba(224,178,92,.25), 0 0 40px rgba(224,178,92,.55); }
+    50% { box-shadow: 0 0 0 10px rgba(224,178,92,.4), 0 0 62px rgba(224,178,92,.85); }
+  }
+  .prizeReveal--special .prizeRevealName { color: var(--gold); }
+  .specialSparkle { display: none; position: absolute; font-size: 1.3rem; pointer-events: none; animation: sparklePop 1.7s ease-in-out infinite; }
+  .prizeReveal--special .specialSparkle { display: block; }
+  .specialSparkle--1 { top: -10px; left: -14px; animation-delay: 0s; }
+  .specialSparkle--2 { top: -6px; right: -18px; animation-delay: .4s; }
+  .specialSparkle--3 { bottom: -12px; left: -8px; animation-delay: .8s; }
+  .specialSparkle--4 { bottom: -14px; right: -10px; animation-delay: 1.2s; }
+  @keyframes sparklePop {
+    0%, 100% { opacity: 0; transform: scale(.4) rotate(0deg); }
+    50% { opacity: 1; transform: scale(1.15) rotate(20deg); }
+  }
+
+  .receipt { position: relative; border: 2px solid var(--indigo); border-radius: 12px; padding: 18px; margin: 16px 0; background: var(--paper-deep); }
+  .receiptStamp { position: absolute; top: -18px; right: -8px; width: 66px; height: 66px; pointer-events: none; transform: rotate(8deg); }
+  .receipt h2 { margin: 0 0 10px; padding-right: 52px; font-size: 1.2rem; color: var(--indigo-deep); }
+  .receiptRow { margin: 6px 0; }
+  .resolutionButtons { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+
+  /* ==== 音のオン/オフ ====
+     negotiate/index.htmlと同じ仕組み。位置は「画面(viewport)の角」ではなく
+     「カード(.appShell、--card-widthの幅で中央寄せ)の右上」を指すように、
+     50vwからカード半幅を引いた分だけ右端の余白を足す形で計算する。これが無いと、
+     デスクトップの広い画面ではカードから離れた画面の隅にボタンだけ浮いて見えてしまう
+     (負値にならないようmax()で12px以上を保証)。 */
+  .soundToggleBtn {
+    position: fixed; top: 12px; right: max(12px, calc(50vw - (var(--card-width) / 2) + 12px));
+    z-index: 20;
+    width: 44px; height: 44px; padding: 0; border-radius: 50%;
+    background: rgba(43,33,24,.55); color: #fff8ee; font-size: 1.3rem;
+    box-shadow: 0 2px 6px rgba(0,0,0,.3);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .soundToggleBtn:active { transform: translateY(1px); box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+</style>
+</head>
+<body>
+  <button id="soundToggleBtn" class="soundToggleBtn" type="button" aria-label="音のオン・オフ切り替え">🔊</button>
+  <div class="appShell">
+  <div class="stallHero">
+    <img src="assets/header-banner.png" alt="" class="stallScene">
+    <div class="stallShade"></div>
+    <div class="stallSign"><img src="assets/logo.png" alt="ICHIGOガチャガチャ" class="signImg"></div>
+    <div class="stallCharacter"><img id="characterImg" src="assets/ichigoban-greet.png" alt="イチゴ番" class="characterImg"></div>
+  </div>
+  <div class="counterLedge"></div>
+
+  <div class="page">
+    <div id="introSection">
+      <p class="lead">🍓 ICHIGOガチャガチャ延長戦へようこそ!ウォレットを接続して店番AIと値切り交渉、決まった値段をICHIGOで支払うだけの、1人でかんたんに遊べるお店です。</p>
+      <p class="muted"><a href="https://ichigo-gatya-web.vercel.app/" target="_blank" rel="noopener" style="color:inherit">🍓 ICHIGOガチャガチャってなに?しくみ・つくった話はこちら</a></p>
+
+      <div class="howItWorks">
+        <div class="howStep"><span class="stepNum">1</span><p>ウォレット(MetaMask等)を接続します。ICHIGOトークン(Optimism)と、少額のETH(ガス代)が必要です。</p></div>
+        <div class="howStep"><span class="stepNum">2</span><p>店番AIとチャットで値切り交渉。会話しだいで安くなるかも。</p></div>
+        <div class="howStep"><span class="stepNum">3</span><p>決まった値段でICHIGOを支払います。</p></div>
+        <div class="howStep"><span class="stepNum">4</span><p>ガチャが回ってカプセルがパカッ!レアが出るときは…?</p></div>
+        <div class="howStep"><span class="stepNum">5</span><p>出てきた景品の記念画像を受け取って保存できます。</p></div>
+      </div>
+
+      <h3>どんな景品が出るの?</h3>
+      <div class="prizeGallery" id="prizeGallery"></div>
+      <p class="prizeGalleryHighlight">🎨 AI生成イラストが5種類 + <strong>れのあさん直筆の激レアイラストが1種類(出現率10%)</strong>!</p>
+      <p class="prizeGalleryNote">※ 実際の絵柄はお楽しみです。ガチャを回して初めて見られます。</p>
+    </div>
+
+    <button id="connectBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-wallet.png" alt=""></span>ウォレットを接続</button>
+    <p class="muted" id="account"></p>
+    <p class="balance" id="balanceLabel"></p>
+
+    <p class="err hidden" id="disabledNotice">現在準備中です。しばらくしてからもう一度お試しください。</p>
+    <p class="err hidden" id="queueNotice"></p>
+
+    <div id="nameSection" class="hidden">
+      <p class="muted">呼び名(任意、店番AIが呼びかけに使います)を入力してください。空欄でも進めます。<br>ひらがな・カタカナ・半角英数字のみ使えます(漢字や絵文字は使えません)。</p>
+      <div class="nameRow">
+        <input id="displayNameInput" type="text" maxlength="20" placeholder="呼び名(任意)">
+        <button id="startNegotiationBtn">この名前で始める</button>
+      </div>
+      <p class="err hidden" id="nameError"></p>
+    </div>
+
+    <div id="chatSection" class="hidden">
+      <div class="chat" id="chat"></div>
+      <div class="chatInputRow">
+        <input id="chatInput" type="text" maxlength="500" placeholder="店番に話しかける…">
+        <button id="sendBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-send.png" alt=""></span>送る</button>
+      </div>
+      <button id="finalizeBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-decide.png" alt=""></span>この価格で決める</button>
+      <p class="priceLine">現在の提示価格
+        <span class="priceTag"><span id="priceLabel"></span> <span class="unit">ICHIGO</span></span>
+        <span class="turnBadge">(<span id="turnLabel"></span>)</span>
+      </p>
+    </div>
+
+    <div id="paySection" class="hidden">
+      <p class="muted" id="payChatLabel">ここまでの会話:</p>
+      <div class="chat" id="payChat"></div>
+      <p class="priceLine" style="margin-top:16px">確定価格
+        <span class="priceTag priceTag--big"><span id="finalPriceLabel"></span> <span class="unit">ICHIGO</span></span>
+      </p>
+      <p class="muted">この価格で購入し、ガチャを回しますか?</p>
+      <div class="resolutionButtons">
+        <button id="payBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-buy.png" alt=""></span>支払ってガチャを回す</button>
+        <button id="cancelPurchaseBtn" class="secondaryBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-cancel.png" alt=""></span>やめる</button>
+      </div>
+    </div>
+
+    <div id="spinSection" class="hidden spinStage">
+      <div id="spinKnobWrap">
+        <img src="assets/ichigoban-thinking.png" alt="" class="spinCharacter">
+        <div class="gachaKnob" aria-hidden="true"></div>
+      </div>
+      <div id="capsuleStage" class="capsuleStage hidden" aria-hidden="true">
+        <div class="kakuteiRays"></div>
+        <span class="spinSparkle spinSparkle--1">✨</span>
+        <span class="spinSparkle spinSparkle--2">✨</span>
+        <span class="spinSparkle spinSparkle--3">✨</span>
+        <span class="spinSparkle spinSparkle--4">✨</span>
+        <div class="capsule">
+          <div class="capsuleTop"></div>
+          <div class="capsuleBottom"></div>
+        </div>
+        <div class="burstFlash"></div>
+      </div>
+      <p id="spinLabel" class="spinLabel">ガチャを回しています…</p>
+    </div>
+
+    <div id="revealSection" class="hidden">
+      <div class="prizeReveal" id="prizeRevealBox">
+        <p class="specialBadge hidden" id="prizeRevealBadge">✨ 手描きスペシャル ✨</p>
+        <div class="prizeRevealImgWrap">
+          <span class="specialSparkle specialSparkle--1">✨</span>
+          <span class="specialSparkle specialSparkle--2">✨</span>
+          <span class="specialSparkle specialSparkle--3">✨</span>
+          <span class="specialSparkle specialSparkle--4">✨</span>
+          <img id="prizeRevealImg" class="prizeRevealImg" src="" alt="">
+        </div>
+        <p class="prizeRevealName" id="prizeRevealName"></p>
+        <p class="muted">おめでとうございます!記念画像をお受け取りください。</p>
+      </div>
+    </div>
+
+    <div id="receiptSection" class="hidden receipt">
+      <img src="assets/receipt-stamp.png" alt="" class="receiptStamp">
+      <h2 id="receiptTitle"></h2>
+      <p class="receiptRow">お支払い <span class="priceTag"><strong id="receiptPriceLabel"></strong> <span class="unit">ICHIGO</span></span></p>
+      <p class="receiptRow muted" id="receiptTimeLabel"></p>
+      <div class="prizeReveal" id="receiptPrizeBox">
+        <p class="specialBadge hidden" id="receiptPrizeBadge">✨ 手描きスペシャル ✨</p>
+        <div class="prizeRevealImgWrap">
+          <span class="specialSparkle specialSparkle--1">✨</span>
+          <span class="specialSparkle specialSparkle--2">✨</span>
+          <span class="specialSparkle specialSparkle--3">✨</span>
+          <span class="specialSparkle specialSparkle--4">✨</span>
+          <img id="receiptPrizeImg" class="prizeRevealImg" src="" alt="">
+        </div>
+        <p class="prizeRevealName" id="receiptPrizeName"></p>
+        <a id="receiptPrizeDownload" class="secondaryBtn btnAnchor" href="" download><span class="iconBadge"><img class="btnIcon" src="assets/icon-decide.png" alt=""></span>画像を保存</a>
+      </div>
+      <p class="receiptRow muted" id="receiptTxHashLabel"></p>
+      <p class="muted hidden" id="receiptChatLabel" style="margin-top:16px">ここまでの会話:</p>
+      <div class="chat hidden" id="receiptChat"></div>
+      <p class="muted"><a href="https://ichigo-gatya-web.vercel.app/" target="_blank" rel="noopener" style="color:inherit">🍓 つくった話・裏話はこちら</a></p>
+      <button id="buyAgainBtn" class="secondaryBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-buy.png" alt=""></span>トップへもどる(もう一度あそぶ)</button>
+    </div>
+
+    <p id="status"></p>
+  </div>
+  </div>
+
+<script type="module">
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+const OP_CHAIN_ID = 10;
+const TOKEN_ADDR = "0x836700463Dce76D9Cc3CDf6F6EDF946312c01869";
+const GAME_WALLET = "0x70775B1d24176De0fda2776303B8a603C671cFFb";
+const ERC20_ABI = [
+  "function balanceOf(address) view returns (uint256)",
+  "function decimals() view returns (uint8)",
+  "function transfer(address to, uint256 amount) returns (bool)",
+];
+const SESSION_STORAGE_KEY = "ichigo_online_session";
+const SESSION_POINTER_TTL_MS = 20 * 60 * 1000;
+const RECEIPT_STORAGE_KEY = "ichigo_online_receipt";
+const RECEIPT_TTL_MS = 30 * 60 * 1000;
+const QUEUE_RETRY_MS = 5000;
+
+const $ = (id) => document.getElementById(id);
+
+// ==== 音(BGM) ====
+// 「開いたらデフォルトで音が出ていて、消したければ消せる」という要望に対応する。
+// ブラウザの自動再生ブロックはユーザー操作が1回も無い再生を防ぐだけなので、
+// このページ内での最初の操作(クリック・タップ・キー入力のいずれか)をきっかけに
+// 開始すれば、体感としては「開いたらすぐ音が出る」に近くなる。
+const SOUND_MUTE_KEY = "ichigo_online_sound_muted";
+let soundMuted = localStorage.getItem(SOUND_MUTE_KEY) === "1";
+const bgmAudio = new Audio("assets/bgm.mp3");
+bgmAudio.loop = true;
+bgmAudio.volume = 0.35;
+// 再生開始/再開は常にこの関数だけを通す(以前は「一度も鳴らしていないか」の
+// フラグ(bgmStarted)で判定していたため、ミュート→ミュート解除で「もう開始済みだから」
+// と判定されて再開しなくなる不具合があった。play()は再生中に呼んでも害が無いので、
+// 常にplay()を呼ぶだけの単純な形にする)。
+function playBgm() {
+  if (soundMuted) return;
+  bgmAudio.play().catch(() => {});
+}
+function startBgmOnFirstInteraction() {
+  const start = () => {
+    playBgm();
+    ["pointerdown", "keydown", "touchstart"].forEach((ev) => document.removeEventListener(ev, start));
+  };
+  ["pointerdown", "keydown", "touchstart"].forEach((ev) => document.addEventListener(ev, start));
+}
+startBgmOnFirstInteraction();
+function updateSoundToggleUI() {
+  $("soundToggleBtn").textContent = soundMuted ? "🔇" : "🔊";
+}
+$("soundToggleBtn").addEventListener("click", () => {
+  soundMuted = !soundMuted;
+  localStorage.setItem(SOUND_MUTE_KEY, soundMuted ? "1" : "0");
+  updateSoundToggleUI();
+  if (soundMuted) {
+    bgmAudio.pause();
+  } else {
+    playBgm(); // 消してからもう一度点けた時に、確実に再生を再開させる
+  }
+});
+updateSoundToggleUI();
+
+function readJSON(key) {
+  try { return JSON.parse(localStorage.getItem(key)); } catch { return null; }
+}
+function writeJSON(key, value) { localStorage.setItem(key, JSON.stringify(value)); }
+
+function showStatus(text, cls) {
+  $("status").textContent = text;
+  $("status").className = cls || "";
+}
+
+function hideAllSections() {
+  for (const id of ["nameSection", "chatSection", "paySection", "spinSection", "revealSection", "receiptSection"]) {
+    $(id).classList.add("hidden");
+  }
+}
+
+function appendBubbleTo(container, role, content) {
+  const div = document.createElement("div");
+  div.className = `bubble ${role === "user" ? "user" : "assistant"}`;
+  div.textContent = content;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+  return div;
+}
+
+let chatTranscript = [];
+function appendBubble(role, content) {
+  chatTranscript.push({ role, content });
+  return appendBubbleTo($("chat"), role, content);
+}
+function renderTranscript(transcript) {
+  chatTranscript = [...transcript];
+  $("chat").innerHTML = "";
+  for (const m of transcript) appendBubbleTo($("chat"), m.role, m.content);
+}
+function renderPastChat(containerId, labelId, transcript) {
+  if (!transcript || transcript.length === 0) {
+    $(containerId).classList.add("hidden");
+    $(labelId).classList.add("hidden");
+    return;
+  }
+  $(containerId).innerHTML = "";
+  for (const m of transcript) appendBubbleTo($(containerId), m.role, m.content);
+  $(containerId).classList.remove("hidden");
+  $(labelId).classList.remove("hidden");
+}
+
+function setNegotiationUiState(price, turn, maxTurn) {
+  $("priceLabel").textContent = price;
+  $("turnLabel").textContent = `${turn}/${maxTurn}ターン`;
+}
+
+const CHARACTER_IMAGES = {
+  greet: "assets/ichigoban-greet.png",
+  thinking: "assets/ichigoban-thinking.png",
+  decided: "assets/ichigoban-decided.png",
+  thanks: "assets/ichigoban-thanks.png",
+};
+function setCharacterImage(state) {
+  const src = CHARACTER_IMAGES[state];
+  const el = $("characterImg");
+  if (!src || !el || el.dataset.state === state) return;
+  el.dataset.state = state;
+  el.src = src;
+}
+
+// 景品のモザイク/サンプル表示。実画像を強くぼかして「うっすら見える」ヒントにする(完全な絵柄は見せない)。
+async function loadPrizeGallery() {
+  try {
+    const res = await fetch("/prize-pool-teaser");
+    const data = await res.json();
+    if (!data.ok) return;
+    const gallery = $("prizeGallery");
+    gallery.innerHTML = "";
+    for (const prize of data.prizes) {
+      const card = document.createElement("div");
+      card.className = "prizeCard" + (prize.rarityPercent <= 15 ? " rare" : "");
+      card.innerHTML = `
+        <img class="prizeMosaic" src="/nft-images/${prize.image}" alt="" loading="lazy">
+        <div class="prizeShade"></div>
+        <div class="prizeMark">?</div>
+        <div class="prizeName">${prize.rarityPercent}%</div>
+      `;
+      gallery.appendChild(card);
+    }
+  } catch {
+    // お披露目ギャラリーが読み込めなくても、参加フロー自体には影響しない
+  }
+}
+loadPrizeGallery();
+
+async function checkOnlineStatus() {
+  try {
+    const res = await fetch("/online-status");
+    const data = await res.json();
+    if (!data.enabled) {
+      $("disabledNotice").classList.remove("hidden");
+      $("connectBtn").disabled = true;
+    }
+    return data;
+  } catch {
+    return null;
+  }
+}
+checkOnlineStatus();
+
+async function ensureOptimism() {
+  const hexId = "0x" + OP_CHAIN_ID.toString(16);
+  try {
+    const currentChainId = await window.ethereum.request({ method: "eth_chainId" });
+    if (currentChainId?.toLowerCase() === hexId) return true;
+  } catch {}
+  try {
+    await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: hexId }] });
+    return true;
+  } catch (err) {
+    if (err.code === 4902) {
+      await window.ethereum.request({
+        method: "wallet_addEthereumChain",
+        params: [{
+          chainId: hexId,
+          chainName: "Optimism",
+          nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
+          rpcUrls: ["https://mainnet.optimism.io"],
+          blockExplorerUrls: ["https://optimistic.etherscan.io"],
+        }],
+      });
+      return true;
+    }
+    showStatus(
+      "Optimismネットワークへの切り替えに失敗しました。お使いのウォレットアプリ側でOptimismネットワークに手動で切り替えてから、もう一度お試しください: " + (err.message || err),
+      "err"
+    );
+    return false;
+  }
+}
+
+let provider, signer, account, token, decimals = 18n;
+let sessionId = null;
+let displayName = null;
+let finalPrice = null;
+let currentPrize = null;
+
+async function refreshBalance() {
+  const bal = await token.balanceOf(account);
+  $("balanceLabel").textContent = ethers.formatUnits(bal, decimals) + " ICHIGO";
+  return bal;
+}
+
+function enterPaymentPhase(price) {
+  setCharacterImage("decided");
+  finalPrice = price;
+  hideAllSections();
+  $("finalPriceLabel").textContent = finalPrice;
+  renderPastChat("payChat", "payChatLabel", chatTranscript);
+  $("paySection").classList.remove("hidden");
+  showStatus("", "");
+}
+
+if (window.ethereum) {
+  window.ethereum.on("accountsChanged", (accounts) => {
+    if (!accounts.length || !signer) return;
+    location.reload();
+  });
+}
+
+async function startNegotiation(nameToSubmit) {
+  let res;
+  try {
+    res = await fetch("/online-negotiate-start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wallet: account, displayName: nameToSubmit || "" }),
+    });
+  } catch (err) {
+    showStatus("交渉開始に失敗しました: " + (err.message || err), "err");
+    return;
+  }
+  let data;
+  try {
+    data = await res.json();
+  } catch {
+    showStatus("交渉開始の応答を読み取れませんでした", "err");
+    return;
+  }
+
+  if (res.status === 429) {
+    // オンライン枠が満杯。現地の物理的な行列に相当するものが無いため、
+    // 自動的に少し待ってから再試行する(参加者が自分でボタンを連打しなくてよいように)。
+    $("queueNotice").textContent = (data.error || "現在混み合っています") + `(${QUEUE_RETRY_MS / 1000}秒後に自動で再試行します)`;
+    $("queueNotice").classList.remove("hidden");
+    setTimeout(() => startNegotiation(nameToSubmit), QUEUE_RETRY_MS);
+    return;
+  }
+  if (!data.ok) {
+    showStatus(data.error || "交渉を開始できませんでした", "err");
+    return;
+  }
+  $("queueNotice").classList.add("hidden");
+
+  sessionId = data.sessionId;
+  displayName = data.displayName;
+  writeJSON(SESSION_STORAGE_KEY, { wallet: account.toLowerCase(), sessionId, displayName, savedAt: Date.now() });
+
+  if (data.status === "awaiting-payment") {
+    enterPaymentPhase(data.price);
+    return;
+  }
+  if (data.status === "awaiting-claim" && data.prize) {
+    finalPrice = data.price;
+    showPrizeReveal(data.prize, null);
+    return;
+  }
+
+  renderTranscript(data.transcript);
+  setNegotiationUiState(data.price, data.turn, data.maxTurn);
+  hideAllSections();
+  $("chatSection").classList.remove("hidden");
+}
+
+const FINAL_REPLY_READ_MS = 1800;
+
+async function sendChatMessage(message) {
+  const userBubble = appendBubble("user", message);
+  $("sendBtn").disabled = true;
+  $("finalizeBtn").disabled = true;
+  try {
+    const res = await fetch("/online-negotiate-message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, message }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      userBubble.remove();
+      chatTranscript.pop();
+      $("chatInput").value = message;
+      showStatus(data.error || "送信に失敗しました", "err");
+      $("sendBtn").disabled = false;
+      $("finalizeBtn").disabled = false;
+      return;
+    }
+    appendBubble("assistant", data.reply);
+    setNegotiationUiState(data.price, data.turn, data.maxTurn);
+    if (data.done) {
+      showStatus("交渉成立!支払い画面に切り替わります…", "ok");
+      setTimeout(() => enterPaymentPhase(data.price), FINAL_REPLY_READ_MS);
+      return;
+    }
+    $("sendBtn").disabled = false;
+    $("finalizeBtn").disabled = false;
+  } catch (err) {
+    userBubble.remove();
+    chatTranscript.pop();
+    $("chatInput").value = message;
+    showStatus("送信に失敗しました: " + (err.message || err), "err");
+    $("sendBtn").disabled = false;
+    $("finalizeBtn").disabled = false;
+  }
+}
+
+const PRIZE_REVEAL_DISPLAY_MS = 1600;
+
+// ガチャ演出: 送金検証OK・景品判明後に再生する(結果を知った上で演出を選ぶ)。
+// special(れのあさん直筆)のときは、揺れている途中でカプセルが金色に変わって光り出す
+// 「確定演出」に切り替わる。普通の景品なら約3秒、直筆なら約5秒で解決するPromiseを返す。
+function playGachaAnimation(special) {
+  return new Promise((resolve) => {
+    const stage = $("capsuleStage");
+    $("spinKnobWrap").classList.add("hidden");
+    stage.classList.remove("hidden");
+    $("spinLabel").textContent = "おっ、なにか出てきたぞ…";
+    stage.classList.add("drop");
+    const DROP_MS = 950;
+    const SHAKE_MS = special ? 3100 : 1400;
+    setTimeout(() => stage.classList.add("shake"), DROP_MS);
+    if (special) {
+      // 揺れ始めてから1秒後に金色化(最初は普通のカプセルに見せてから変える)
+      setTimeout(() => {
+        stage.classList.add("capsuleStage--special");
+        $("spinLabel").textContent = "な、なんだこの光は…!?";
+      }, DROP_MS + 1000);
+    }
+    setTimeout(() => {
+      stage.classList.remove("shake");
+      stage.classList.add("burst");
+    }, DROP_MS + SHAKE_MS);
+    setTimeout(resolve, DROP_MS + SHAKE_MS + 650);
+  });
+}
+
+// 決済確認後、景品が決まった演出。まだ受け取り確定(サーバーへの/online-claim-confirm)を
+// していない状態でページを再読み込みした場合(data.status === "awaiting-claim")もここに合流する。
+// 参加者側はウォレットでの追加操作は不要なので、少し見せたら自動でレシート画面に進む。
+function showPrizeReveal(prize, txHash) {
+  hideAllSections();
+  currentPrize = prize;
+  $("prizeRevealImg").src = `/nft-images/${prize.image}`;
+  $("prizeRevealName").textContent = prize.name;
+  $("prizeRevealBox").classList.toggle("prizeReveal--special", !!prize.special);
+  $("prizeRevealBadge").classList.toggle("hidden", !prize.special);
+  $("revealSection").classList.remove("hidden");
+  setCharacterImage("thanks");
+
+  fetch("/online-claim-confirm", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId }),
+  }).catch(() => {});
+
+  setTimeout(() => {
+    enterReceiptPhase({ prize, price: finalPrice, txHash: txHash || null });
+  }, PRIZE_REVEAL_DISPLAY_MS);
+}
+
+function enterReceiptPhase({ prize, price, txHash }) {
+  const receipt = {
+    wallet: account, displayName, price, txHash, prize,
+    paidAt: Date.now(), transcript: [...chatTranscript],
+  };
+  writeJSON(RECEIPT_STORAGE_KEY, receipt);
+  localStorage.removeItem(SESSION_STORAGE_KEY);
+  renderReceipt(receipt);
+}
+
+function renderReceipt(receipt) {
+  hideAllSections();
+  $("introSection").classList.add("hidden");
+  $("connectBtn").classList.add("hidden");
+  $("account").classList.add("hidden");
+  $("balanceLabel").classList.add("hidden");
+  $("receiptTitle").textContent = `${receipt.displayName || "お客"}さん、お買い上げありがとうございます!`;
+  $("receiptPriceLabel").textContent = receipt.price;
+  $("receiptTimeLabel").textContent = "支払い時刻: " + new Date(receipt.paidAt).toLocaleString("ja-JP");
+  $("receiptPrizeImg").src = `/nft-images/${receipt.prize.image}`;
+  $("receiptPrizeName").textContent = receipt.prize.name;
+  $("receiptPrizeBox").classList.toggle("prizeReveal--special", !!receipt.prize.special);
+  $("receiptPrizeBadge").classList.toggle("hidden", !receipt.prize.special);
+  $("receiptPrizeDownload").href = `/nft-images/${receipt.prize.image}`;
+  $("receiptPrizeDownload").download = receipt.prize.image;
+  $("receiptTxHashLabel").classList.toggle("hidden", !receipt.txHash);
+  if (receipt.txHash) {
+    $("receiptTxHashLabel").textContent = "送金txHash: " + receipt.txHash;
+  }
+  renderPastChat("receiptChat", "receiptChatLabel", receipt.transcript);
+  $("receiptSection").classList.remove("hidden");
+}
+
+function tryRestoreReceipt() {
+  const receipt = readJSON(RECEIPT_STORAGE_KEY);
+  if (!receipt) return false;
+  if (Date.now() - receipt.paidAt > RECEIPT_TTL_MS) {
+    localStorage.removeItem(RECEIPT_STORAGE_KEY);
+    return false;
+  }
+  renderReceipt(receipt);
+  return true;
+}
+
+$("buyAgainBtn").addEventListener("click", () => {
+  localStorage.removeItem(RECEIPT_STORAGE_KEY);
+  localStorage.removeItem(SESSION_STORAGE_KEY);
+  location.reload();
+});
+
+$("connectBtn").addEventListener("click", async () => {
+  playBgm();
+  if (!window.ethereum) {
+    if (IS_MOBILE) {
+      const target = location.href.replace(/^https?:\/\//, "");
+      location.href = `https://metamask.app.link/dapp/${target}`;
+      return;
+    }
+    showStatus("ウォレットが見つかりません。MetaMaskなどのウォレット拡張機能をブラウザに追加してください", "err");
+    return;
+  }
+  try {
+    provider = new ethers.BrowserProvider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    if (!(await ensureOptimism())) return;
+    signer = await provider.getSigner();
+    account = await signer.getAddress();
+    token = new ethers.Contract(TOKEN_ADDR, ERC20_ABI, signer);
+    decimals = await token.decimals();
+
+    $("account").textContent = account;
+    await refreshBalance();
+    $("connectBtn").disabled = true;
+    // ウォレット接続後は、遊び方の説明・景品ギャラリーといった導入コンテンツは役目を終える。
+    // 表示したままだと交渉・支払い・景品お披露目の各画面が毎回この下(スマホだと1000px超)まで
+    // スクロールしないと見えず、1人プレイの操作性を大きく損なうため、ここで畳む。
+    $("introSection").classList.add("hidden");
+    showStatus("", "");
+
+    const saved = readJSON(SESSION_STORAGE_KEY);
+    if (saved && saved.wallet === account.toLowerCase() && Date.now() - saved.savedAt < SESSION_POINTER_TTL_MS) {
+      await startNegotiation(saved.displayName || "");
+    } else {
+      $("nameSection").classList.remove("hidden");
+    }
+  } catch (err) {
+    showStatus("接続エラー: " + (err.shortMessage || err.message || err), "err");
+  }
+});
+
+const DISPLAY_NAME_PATTERN = /^[0-9A-Za-z぀-ヿ ]*$/;
+
+$("startNegotiationBtn").addEventListener("click", () => {
+  const name = $("displayNameInput").value.trim();
+  if (!DISPLAY_NAME_PATTERN.test(name)) {
+    $("nameError").textContent = "ひらがな・カタカナ・半角英数字のみ使えます(漢字や絵文字は使えません)。修正してください";
+    $("nameError").classList.remove("hidden");
+    return;
+  }
+  $("nameError").classList.add("hidden");
+  startNegotiation(name);
+});
+
+$("sendBtn").addEventListener("click", () => {
+  const input = $("chatInput");
+  const message = input.value.trim();
+  if (!message) return;
+  input.value = "";
+  sendChatMessage(message);
+});
+$("chatInput").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  if (e.isComposing || e.keyCode === 229) return;
+  e.preventDefault();
+  $("sendBtn").click();
+});
+
+$("finalizeBtn").addEventListener("click", async () => {
+  const currentPriceText = $("priceLabel").textContent;
+  if (!confirm(`${currentPriceText} ICHIGOで決めます。もう交渉には戻れませんが、よろしいですか?`)) return;
+  $("sendBtn").disabled = true;
+  $("finalizeBtn").disabled = true;
+  try {
+    const res = await fetch("/online-negotiate-finalize", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      showStatus(data.error || "確定できませんでした", "err");
+      return;
+    }
+    enterPaymentPhase(data.price);
+  } catch (err) {
+    showStatus("確定に失敗しました: " + (err.message || err), "err");
+  } finally {
+    $("sendBtn").disabled = false;
+    $("finalizeBtn").disabled = false;
+  }
+});
+
+$("payBtn").addEventListener("click", async () => {
+  if (!confirm(`${finalPrice} ICHIGOを支払って、ガチャを回しますか?`)) return;
+  const btn = $("payBtn");
+  let txHashForErrorDisplay = null;
+  try {
+    btn.disabled = true;
+    const amount = ethers.parseUnits(String(finalPrice), decimals);
+    const bal = await refreshBalance();
+    if (bal < amount) {
+      showStatus(`イチゴが足りません(必要: ${finalPrice})`, "err");
+      return;
+    }
+
+    showStatus("MetaMaskで送金を承認してください…", "");
+    const tx = await token.transfer(GAME_WALLET, amount);
+    txHashForErrorDisplay = tx.hash;
+
+    showStatus("送金を確認中…(数秒)", "");
+    await tx.wait();
+    await refreshBalance();
+
+    showStatus("送金確定。オンチェーンで検証し、ガチャを回しています…", "");
+    hideAllSections();
+    $("spinSection").classList.remove("hidden");
+
+    const res = await fetch("/online-verify-and-claim", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ txHash: tx.hash, sessionId }),
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      showStatus("送金の確認に失敗しました: " + (data.error || "不明なエラー") + `\n(txHash: ${tx.hash})`, "err");
+      hideAllSections();
+      $("paySection").classList.remove("hidden");
+      return;
+    }
+
+    showStatus("", "");
+    await playGachaAnimation(!!(data.prize && data.prize.special));
+    showPrizeReveal(data.prize, tx.hash);
+  } catch (err) {
+    showStatus("エラー: " + (err.shortMessage || err.message || err) + (txHashForErrorDisplay ? `\n(送金txHash: ${txHashForErrorDisplay})` : ""), "err");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$("cancelPurchaseBtn").addEventListener("click", async () => {
+  if (!confirm("参加をやめますか?")) return;
+  try {
+    await fetch("/online-negotiate-cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId }),
+    });
+  } catch {}
+  localStorage.removeItem(SESSION_STORAGE_KEY);
+  location.reload();
+});
+
+tryRestoreReceipt();
+</script>
+</body>
+</html>

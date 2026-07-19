@@ -1,0 +1,6 @@
+{
+  "functions": {
+    "api/online-negotiate-message.js": { "maxDuration": 60 },
+    "api/online-verify-and-claim.js": { "maxDuration": 30 }
+  }
+}
