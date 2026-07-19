@@ -69,6 +69,9 @@ export default async function handler(req, res) {
       status: session.status,
       done: session.status === 'awaiting-payment',
     });
+  } catch (err) {
+    console.error('online-negotiate-message処理中にエラー:', err);
+    return res.status(500).json({ ok: false, error: '送信に失敗しました: ' + (err?.message || String(err)) });
   } finally {
     await releaseLock(sessionId);
   }

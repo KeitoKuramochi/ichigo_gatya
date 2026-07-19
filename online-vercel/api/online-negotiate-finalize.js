@@ -23,6 +23,11 @@ export default async function handler(req, res) {
     }
     await saveSession(sessionId, session);
     return res.status(200).json({ ok: true, price: session.currentPrice, status: session.status });
+  } catch (err) {
+    // 例外を握りつぶさずJSONで返す(Vercelの素の500(FUNCTION_INVOCATION_FAILED)だと
+    // フロント側がres.json()でパース失敗し原因不明のエラーになってしまうため)。
+    console.error('online-negotiate-finalize処理中にエラー:', err);
+    return res.status(500).json({ ok: false, error: '価格の確定に失敗しました: ' + (err?.message || String(err)) });
   } finally {
     await releaseLock(sessionId);
   }

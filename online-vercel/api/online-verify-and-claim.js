@@ -85,6 +85,6 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     console.error('online-verify-and-claim処理中にエラー:', err);
-    return res.status(500).json({ ok: false, error: 'サーバー内部エラー' });
+    return res.status(500).json({ ok: false, error: 'サーバー内部エラー: ' + (err?.message || String(err)) });
   }
 }
