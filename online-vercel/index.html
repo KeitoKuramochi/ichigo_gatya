@@ -160,6 +160,7 @@
   .prizeCard.rare { box-shadow: 0 0 0 2px var(--gold), 0 0 12px rgba(224,178,92,.6); }
   .prizeCard.rare .prizeMark { color: #fff2c9; }
   #myCollectionBtn { margin: 8px 0 0; }
+  #drawAgainBtn { margin: 4px 0 0; }
 
   /* ==== 自分が実際に当てた景品(モザイク解除・いつでも再ダウンロード可) ==== */
   .prizeCard.owned { cursor: pointer; box-shadow: 0 0 0 2px var(--vermilion), 0 3px 10px rgba(0,0,0,.35); }
@@ -173,18 +174,6 @@
     position: absolute; z-index: 1; bottom: 4px; right: 4px; font-size: .62rem;
     background: rgba(0,0,0,.55); color: #fff8ee; border-radius: 4px; padding: 2px 6px;
   }
-
-  /* ==== 公開アナウンス(誰かが当てるとトップページに流れるトースト) ==== */
-  .announceToast {
-    position: fixed; top: 10px; left: 50%; z-index: 50; max-width: calc(100vw - 32px);
-    transform: translate(-50%, -140%); transition: transform .35s ease;
-    font-family: var(--font-body); font-size: .85rem; font-weight: 500; color: #fff8ee;
-    background: var(--indigo-deep); border: 1px solid rgba(224,178,92,.5);
-    border-radius: 999px; padding: 9px 18px; box-shadow: 0 6px 18px rgba(0,0,0,.4);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  }
-  .announceToast.show { transform: translate(-50%, 0); }
-  .announceToast.special { border-color: var(--gold); background: linear-gradient(120deg, var(--indigo-deep), #3a2f14); }
   .prizeGalleryHighlight {
     font-size: .88rem; color: var(--vermilion-deep); background: var(--paper-deep);
     border-radius: 8px; padding: 8px 12px; margin: -6px 0 6px;
@@ -363,7 +352,6 @@
 </head>
 <body>
   <button id="soundToggleBtn" class="soundToggleBtn" type="button" aria-label="音のオン・オフ切り替え">🔊</button>
-  <div id="announceToast" class="announceToast" aria-live="polite"></div>
   <div class="appShell">
   <div class="stallHero">
     <img src="assets/header-banner.png" alt="" class="stallScene">
@@ -390,6 +378,7 @@
       <div class="prizeGallery" id="prizeGallery"></div>
       <p class="prizeGalleryHighlight">🎨 AI生成イラストが5種類 + <strong>れのあさん直筆の激レアイラストが1種類(出現率10%)</strong>!</p>
       <p class="prizeGalleryNote">※ 実際の絵柄はお楽しみです。ガチャを回して初めて見られます。</p>
+      <button id="drawAgainBtn" class="hidden" type="button"><span class="iconBadge"><img class="btnIcon" src="assets/icon-buy.png" alt=""></span>もう一度ガチャを引く</button>
     </div>
 
     <button id="connectBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-wallet.png" alt=""></span>ウォレットを接続</button>
@@ -709,39 +698,6 @@ async function loadMyPrizes(wallet) {
   }
 }
 
-// ==== 公開アナウンス: 誰か(自分含む)が当てるとトップページにトーストで流す ====
-// /online-negotiate-currentのrevealsは元々投影ページ用に用意されていたもの(bridge側と
-// 同じ設計)をそのまま流用する。ページを開いた時刻より後の当選だけを知らせる。
-let lastAnnouncedAt = Date.now();
-let announceHideTimer = null;
-function showAnnouncement(reveal) {
-  const el = $("announceToast");
-  el.textContent = reveal.prize.special
-    ? `✨ ${reveal.displayName}さんが「${reveal.prize.name}」を当てました!`
-    : `🎉 ${reveal.displayName}さんが「${reveal.prize.name}」を当てました`;
-  el.classList.toggle("special", !!reveal.prize.special);
-  el.classList.add("show");
-  clearTimeout(announceHideTimer);
-  announceHideTimer = setTimeout(() => el.classList.remove("show"), 4500);
-}
-async function pollAnnouncements() {
-  try {
-    const res = await fetch("/online-negotiate-current");
-    const data = await res.json();
-    const fresh = (data.reveals || [])
-      .filter((r) => r.revealedAt > lastAnnouncedAt)
-      .sort((a, b) => a.revealedAt - b.revealedAt);
-    for (const reveal of fresh) {
-      showAnnouncement(reveal);
-      lastAnnouncedAt = reveal.revealedAt;
-    }
-  } catch {
-    // 取得できなくてもアナウンスが出ないだけで、参加フロー自体には影響しない
-  }
-}
-pollAnnouncements();
-setInterval(pollAnnouncements, 4000);
-
 async function checkOnlineStatus() {
   try {
     const res = await fetch("/online-status");
@@ -1041,37 +997,43 @@ $("connectBtn").addEventListener("click", async () => {
     $("connectBtn").disabled = true;
     $("connectBtn").classList.add("hidden");
     $("myCollectionBtn").classList.remove("hidden");
+    $("drawAgainBtn").classList.remove("hidden");
     loadMyPrizes(account); // ギャラリーのモザイク解除(交渉中も裏で更新しておき、ボタンでいつでも見返せるように)
-    // ウォレット接続後は、遊び方の説明・景品ギャラリーといった導入コンテンツは役目を終える。
-    // 表示したままだと交渉・支払い・景品お披露目の各画面が毎回この下(スマホだと1000px超)まで
-    // スクロールしないと見えず、1人プレイの操作性を大きく損なうため、ここで畳む
-    // (「集めた景品を見る」ボタンでいつでも呼び戻せる)。
-    $("introSection").classList.add("hidden");
     showStatus("", "");
-
-    const saved = readJSON(SESSION_STORAGE_KEY);
-    if (saved && saved.wallet === account.toLowerCase() && Date.now() - saved.savedAt < SESSION_POINTER_TTL_MS) {
-      await startNegotiation(saved.displayName || "");
-    } else {
-      $("nameSection").classList.remove("hidden");
-    }
+    await enterNegotiationFlow();
   } catch (err) {
     showStatus("接続エラー: " + (err.shortMessage || err.message || err), "err");
   }
 });
 
+// 保存済みセッションがあれば復帰、無ければ呼び名入力から開始する。ウォレット接続直後と、
+// 「もう一度ガチャを引く」ボタンの両方から呼ぶ共通処理。
+async function enterNegotiationFlow() {
+  // 遊び方の説明・景品ギャラリーといった導入コンテンツは役目を終えたら畳む。表示したままだと
+  // 交渉・支払い・景品お披露目の各画面が毎回この下(スマホだと1000px超)までスクロールしないと
+  // 見えず、1人プレイの操作性を大きく損なうため(「集めた景品を見る」ボタンでいつでも呼び戻せる)。
+  $("introSection").classList.add("hidden");
+  const saved = readJSON(SESSION_STORAGE_KEY);
+  if (saved && saved.wallet === account.toLowerCase() && Date.now() - saved.savedAt < SESSION_POINTER_TTL_MS) {
+    await startNegotiation(saved.displayName || "");
+  } else {
+    hideAllSections();
+    $("nameSection").classList.remove("hidden");
+  }
+}
+
 // 交渉・支払い・景品お披露目の途中でも、いつでも「これまで集めた景品」に戻って
 // 見返せるようにする(ボタンで導入セクション=ギャラリーを再表示するだけの単純な仕組み)。
 $("myCollectionBtn").addEventListener("click", () => {
-  const intro = $("introSection");
-  const showing = !intro.classList.contains("hidden");
-  if (showing) {
-    intro.classList.add("hidden");
-    return;
-  }
   hideAllSections();
+  const intro = $("introSection");
   intro.classList.remove("hidden");
   intro.scrollIntoView({ behavior: "smooth", block: "start" });
+});
+
+// 景品ギャラリー(集めた景品ビュー)から、もう一度ガチャを引く交渉に戻る。
+$("drawAgainBtn").addEventListener("click", () => {
+  enterNegotiationFlow();
 });
 
 const DISPLAY_NAME_PATTERN = /^[0-9A-Za-z぀-ヿ ]*$/;
@@ -1106,6 +1068,10 @@ $("finalizeBtn").addEventListener("click", async () => {
   if (!confirm(`${currentPriceText} ICHIGOで決めます。もう交渉には戻れませんが、よろしいですか?`)) return;
   $("sendBtn").disabled = true;
   $("finalizeBtn").disabled = true;
+  // オンチェーンの問い合わせ(decimals取得)を伴うため、通信環境によっては数秒かかることがある。
+  // 何も表示しないと「支払い画面が出てこない、固まった」ように見えてしまうため、
+  // ボタンのdisabled表示だけに頼らず明示的な状態文言を出す。
+  showStatus("価格を確定しています…", "");
   try {
     const res = await fetch("/online-negotiate-finalize", {
       method: "POST",
