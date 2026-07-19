@@ -1,6 +1,7 @@
 import { getSession, saveSession, acquireLock, releaseLock } from './_lib/store.js';
 import { readJsonBody } from './_lib/util.js';
 import { applyFinalPrice } from './_lib/pricing.js';
+import { getRpcHostForDebug, TOKEN_ADDR } from './_lib/chain.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'method not allowed' });
@@ -27,7 +28,12 @@ export default async function handler(req, res) {
     // 例外を握りつぶさずJSONで返す(Vercelの素の500(FUNCTION_INVOCATION_FAILED)だと
     // フロント側がres.json()でパース失敗し原因不明のエラーになってしまうため)。
     console.error('online-negotiate-finalize処理中にエラー:', err);
-    return res.status(500).json({ ok: false, error: '価格の確定に失敗しました: ' + (err?.message || String(err)) });
+    return res.status(500).json({
+      ok: false,
+      error: '価格の確定に失敗しました: ' + (err?.message || String(err)),
+      debugRpcHost: getRpcHostForDebug(),
+      debugTokenAddr: TOKEN_ADDR,
+    });
   } finally {
     await releaseLock(sessionId);
   }

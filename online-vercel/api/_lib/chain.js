@@ -76,4 +76,13 @@ export function findValidTransfer(receipt, minWei) {
   return null;
 }
 
+// デバッグ用: 実際に使われているRPC_URLのホスト名だけを安全に取り出す(APIキー部分は伏せる)
+export function getRpcHostForDebug() {
+  try {
+    return new URL(RPC_URL).hostname;
+  } catch {
+    return `(invalid RPC_URL: ${JSON.stringify(RPC_URL)})`;
+  }
+}
+
 export { ethers, GAME_WALLET, TOKEN_ADDR };
