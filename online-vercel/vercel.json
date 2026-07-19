@@ -2,5 +2,18 @@
   "functions": {
     "api/online-negotiate-message.js": { "maxDuration": 60 },
     "api/online-verify-and-claim.js": { "maxDuration": 30 }
-  }
+  },
+  "rewrites": [
+    { "source": "/online-status", "destination": "/api/online-status" },
+    { "source": "/prize-pool-teaser", "destination": "/api/prize-pool-teaser" },
+    { "source": "/online-negotiate-start", "destination": "/api/online-negotiate-start" },
+    { "source": "/online-negotiate-message", "destination": "/api/online-negotiate-message" },
+    { "source": "/online-negotiate-finalize", "destination": "/api/online-negotiate-finalize" },
+    { "source": "/online-negotiate-cancel", "destination": "/api/online-negotiate-cancel" },
+    { "source": "/online-negotiate-current", "destination": "/api/online-negotiate-current" },
+    { "source": "/online-verify-and-claim", "destination": "/api/online-verify-and-claim" },
+    { "source": "/online-claim-confirm", "destination": "/api/online-claim-confirm" },
+    { "source": "/online-negotiate-admin-list", "destination": "/api/online-negotiate-admin-list" },
+    { "source": "/online-negotiate-admin-cancel", "destination": "/api/online-negotiate-admin-cancel" }
+  ]
 }
