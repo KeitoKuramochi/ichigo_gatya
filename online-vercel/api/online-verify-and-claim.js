@@ -1,5 +1,5 @@
 import { ONLINE_ENABLED } from './_lib/config.js';
-import { getSession, saveSession, isTxUsed, markTxUsed, pushReveal } from './_lib/store.js';
+import { getSession, saveSession, isTxUsed, markTxUsed, pushReveal, recordWonPrize } from './_lib/store.js';
 import { readJsonBody, maskWallet } from './_lib/util.js';
 import { getConfirmedReceiptWithRetry, isRecentEnough, findValidTransfer, getTokenDecimals, ethers } from './_lib/chain.js';
 import { pickPrize } from './_lib/prize-pool.js';
@@ -75,6 +75,17 @@ export default async function handler(req, res) {
       displayName: session.displayName || maskWallet(session.wallet),
       prize: { id: prize.id, name: prize.name, image: prize.image, special: prize.special || false },
       revealedAt: Date.now(),
+    });
+
+    // トップページの景品ギャラリーで「自分が当てたものはいつでも見返せる」ようにする
+    // ための永続記録(セッションと違いTTLで消えない)。
+    await recordWonPrize(session.wallet, {
+      id: prize.id,
+      name: prize.name,
+      image: prize.image,
+      special: prize.special || false,
+      wonAt: Date.now(),
+      txHash,
     });
 
     return res.status(200).json({

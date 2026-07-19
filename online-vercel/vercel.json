@@ -14,6 +14,7 @@
     { "source": "/online-verify-and-claim", "destination": "/api/online-verify-and-claim" },
     { "source": "/online-claim-confirm", "destination": "/api/online-claim-confirm" },
     { "source": "/online-negotiate-admin-list", "destination": "/api/online-negotiate-admin-list" },
-    { "source": "/online-negotiate-admin-cancel", "destination": "/api/online-negotiate-admin-cancel" }
+    { "source": "/online-negotiate-admin-cancel", "destination": "/api/online-negotiate-admin-cancel" },
+    { "source": "/online-my-prizes", "destination": "/api/online-my-prizes" }
   ]
 }

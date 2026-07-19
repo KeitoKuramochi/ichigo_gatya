@@ -148,3 +148,18 @@ export async function acquireLock(sessionId) {
 export async function releaseLock(sessionId) {
   await redis.del(lockKey(sessionId));
 }
+
+// ウォレットごとの「実際に当てた景品」の永続記録(TTL無し)。トップページの景品ギャラリーで
+// 「自分が当てたものだけモザイクを解除していつでも再ダウンロードできる」ために使う。
+// セッション(SESSION_TTL_SEC=20分で消える)とは別物として、支払い確定のたびに積む。
+const wonPrizesKey = (wallet) => `online:won:${wallet.toLowerCase()}`;
+const WON_PRIZES_MAX = 200; // 一人が際限なく回し続けた場合の保険的な上限
+
+export async function recordWonPrize(wallet, record) {
+  await redis.lpush(wonPrizesKey(wallet), record);
+  await redis.ltrim(wonPrizesKey(wallet), 0, WON_PRIZES_MAX - 1);
+}
+
+export async function listWonPrizes(wallet) {
+  return redis.lrange(wonPrizesKey(wallet), 0, WON_PRIZES_MAX - 1);
+}
