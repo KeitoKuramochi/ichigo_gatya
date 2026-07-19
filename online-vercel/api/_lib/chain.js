@@ -4,7 +4,11 @@
 import { ethers } from 'ethers';
 
 const {
-  RPC_URL = 'https://mainnet.optimism.io',
+  // Optimism公式の無料公開RPC(mainnet.optimism.io)はVercel等クラウド事業者のIPからの
+  // アクセスをレート制限/ブロックすることがあり(decimals()呼び出しが空応答"0x"を返し
+  // BAD_DATAで落ちる不具合として発覚、2026-07-19)、bridgeのRender環境では問題なく
+  // 動いていたためこの移植時点では気づけなかった。drpc.orgの公開RPCに変更。
+  RPC_URL = 'https://optimism.drpc.org',
   TOKEN_ADDR = '0x836700463Dce76D9Cc3CDf6F6EDF946312c01869',
   GAME_WALLET = '0x70775B1d24176De0fda2776303B8a603C671cFFb',
 } = process.env;
