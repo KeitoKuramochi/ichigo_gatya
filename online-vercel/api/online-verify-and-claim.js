@@ -65,6 +65,7 @@ export default async function handler(req, res) {
 
     const prize = pickPrize();
     const decimals = await getTokenDecimals();
+    const paidAmount = ethers.formatUnits(transfer.args.value, decimals);
 
     session.status = 'awaiting-claim';
     session.prize = prize;
@@ -77,13 +78,14 @@ export default async function handler(req, res) {
       revealedAt: Date.now(),
     });
 
-    // トップページの景品ギャラリーで「自分が当てたものはいつでも見返せる」ようにする
-    // ための永続記録(セッションと違いTTLで消えない)。
+    // トップページの景品ギャラリー・購入履歴で「自分が当てたものはいつでも見返せる」
+    // ようにするための永続記録(セッションと違いTTLで消えない)。
     await recordWonPrize(session.wallet, {
       id: prize.id,
       name: prize.name,
       image: prize.image,
       special: prize.special || false,
+      price: paidAmount,
       wonAt: Date.now(),
       txHash,
     });
@@ -91,7 +93,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       txHash,
-      price: ethers.formatUnits(transfer.args.value, decimals),
+      price: paidAmount,
       prize: { id: prize.id, name: prize.name, image: prize.image, special: prize.special || false },
     });
   } catch (err) {

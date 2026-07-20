@@ -159,8 +159,25 @@
   .prizeCard .prizeName { position: absolute; z-index: 1; bottom: 4px; left: 4px; right: 4px; font-size: .62rem; color: #fff8ee; background: rgba(0,0,0,.35); border-radius: 4px; padding: 2px 3px; }
   .prizeCard.rare { box-shadow: 0 0 0 2px var(--gold), 0 0 12px rgba(224,178,92,.6); }
   .prizeCard.rare .prizeMark { color: #fff2c9; }
-  #myCollectionBtn { margin: 8px 0 0; }
-  #drawAgainBtn { margin: 4px 0 0; }
+  #homeBtn { margin: 8px 0 0; }
+
+  /* ==== 接続後のホーム画面(ガチャを回すボタン・直近の記録) ==== */
+  #dashboardSection { margin-top: 4px; }
+  #spinBtn {
+    width: 100%; font-size: 1.15rem; padding: 16px 18px; margin: 4px 0 14px;
+    box-shadow: 0 4px 0 var(--vermilion-deep), 0 6px 14px rgba(0,0,0,.25);
+  }
+  .historyList { list-style: none; margin: 0 0 20px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .historyList li {
+    display: flex; align-items: center; gap: 10px; background: var(--paper-deep);
+    border-radius: 10px; padding: 6px 10px;
+  }
+  .historyThumb { width: 34px; height: 34px; border-radius: 6px; overflow: hidden; flex-shrink: 0; background: var(--indigo-deep); }
+  .historyThumb img { width: 100%; height: 100%; object-fit: cover; }
+  .historyText { font-size: .82rem; color: var(--ink); }
+  .historyText .historyPrice { color: var(--ink-soft); }
+  .historyText strong { color: var(--vermilion-deep); }
+  .historyList li.special .historyText strong { color: var(--gold); background: var(--indigo-deep); padding: 0 4px; border-radius: 3px; }
 
   /* ==== 自分が実際に当てた景品(モザイク解除・いつでも再ダウンロード可) ==== */
   .prizeCard.owned { cursor: pointer; box-shadow: 0 0 0 2px var(--vermilion), 0 3px 10px rgba(0,0,0,.35); }
@@ -169,11 +186,20 @@
     position: absolute; z-index: 1; top: 4px; left: 4px; font-size: .58rem; font-weight: 700;
     background: var(--vermilion); color: #fff8ee; border-radius: 4px; padding: 2px 5px;
   }
-  .prizeCard.owned.special .ownedBadge { background: var(--gold); color: #3a2a05; }
   .prizeCard.owned .ownedDownload {
     position: absolute; z-index: 1; bottom: 4px; right: 4px; font-size: .62rem;
     background: rgba(0,0,0,.55); color: #fff8ee; border-radius: 4px; padding: 2px 6px;
   }
+  /* 直筆(手描きスペシャル)は当選演出と同じ金の輝き・グロー・スパークルで豪華に見せる */
+  .prizeCard.owned.special {
+    box-shadow: 0 0 0 2px var(--gold), 0 0 16px rgba(224,178,92,.7);
+    animation: specialGlow 1.8s ease-in-out infinite;
+  }
+  .prizeCard.owned.special .ownedBadge {
+    background: linear-gradient(120deg, #fdf1cf, var(--gold), #fdf1cf); background-size: 200% auto;
+    animation: specialShimmer 2.4s linear infinite; color: #3a2a05;
+  }
+  .prizeCard.owned.special .specialSparkle { display: block; font-size: 1rem; }
   .prizeGalleryHighlight {
     font-size: .88rem; color: var(--vermilion-deep); background: var(--paper-deep);
     border-radius: 8px; padding: 8px 12px; margin: -6px 0 6px;
@@ -362,7 +388,7 @@
   <div class="counterLedge"></div>
 
   <div class="page">
-    <div id="introSection">
+    <div id="pitchSection">
       <p class="lead">🍓 ICHIGOガチャガチャ延長戦へようこそ!ウォレットを接続して店番AIと値切り交渉、決まった値段をICHIGOで支払うだけの、1人でかんたんに遊べるお店です。</p>
       <p class="muted"><a href="https://ichigo-gatya-web.vercel.app/" target="_blank" rel="noopener" style="color:inherit">🍓 ICHIGOガチャガチャってなに?しくみ・つくった話はこちら</a></p>
 
@@ -373,21 +399,32 @@
         <div class="howStep"><span class="stepNum">4</span><p>ガチャが回ってカプセルがパカッ!レアが出るときは…?</p></div>
         <div class="howStep"><span class="stepNum">5</span><p>出てきた景品の記念画像を受け取って保存できます。</p></div>
       </div>
-
-      <h3>どんな景品が出るの?</h3>
-      <div class="prizeGallery" id="prizeGallery"></div>
-      <p class="prizeGalleryHighlight">🎨 AI生成イラストが5種類 + <strong>れのあさん直筆の激レアイラストが1種類(出現率10%)</strong>!</p>
-      <p class="prizeGalleryNote">※ 実際の絵柄はお楽しみです。ガチャを回して初めて見られます。</p>
-      <button id="drawAgainBtn" class="hidden" type="button"><span class="iconBadge"><img class="btnIcon" src="assets/icon-buy.png" alt=""></span>もう一度ガチャを引く</button>
     </div>
 
     <button id="connectBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-wallet.png" alt=""></span>ウォレットを接続</button>
-    <button id="myCollectionBtn" class="secondaryBtn hidden" type="button">🍓 集めた景品を見る</button>
+    <button id="homeBtn" class="secondaryBtn hidden" type="button">🏠 ホームに戻る</button>
     <p class="muted" id="account"></p>
     <p class="balance" id="balanceLabel"></p>
 
     <p class="err hidden" id="disabledNotice">現在準備中です。しばらくしてからもう一度お試しください。</p>
     <p class="err hidden" id="queueNotice"></p>
+
+    <!-- 接続後の「ホーム」画面: 所持金(上のbalanceLabel)・ガチャを回すボタン・直近の記録・
+         これまでの景品ギャラリーをまとめて表示する。ボタン一つ挟まずに済むよう、
+         「見るボタン」ではなく最初から中身を出しておく方針(要望により変更)。 -->
+    <div id="dashboardSection" class="hidden">
+      <button id="spinBtn" type="button"><span class="iconBadge"><img class="btnIcon" src="assets/icon-buy.png" alt=""></span>🎰 ガチャを回す</button>
+
+      <div id="historyBox" class="hidden">
+        <h3>直近の記録</h3>
+        <ul class="historyList" id="historyList"></ul>
+      </div>
+
+      <h3>どんな景品が出るの?</h3>
+      <div class="prizeGallery" id="prizeGallery"></div>
+      <p class="prizeGalleryHighlight">🎨 AI生成イラストが5種類 + <strong>れのあさん直筆の激レアイラストが1種類(出現率10%)</strong>!</p>
+      <p class="prizeGalleryNote">※ 実際の絵柄はお楽しみです。ガチャを回して初めて見られます。</p>
+    </div>
 
     <div id="nameSection" class="hidden">
       <p class="muted">呼び名(任意、店番AIが呼びかけに使います)を入力してください。空欄でも進めます。<br>ひらがな・カタカナ・半角英数字のみ使えます(漢字や絵文字は使えません)。</p>
@@ -656,7 +693,8 @@ function downloadImage(image) {
 }
 
 // 実際に当てた景品のカードを、モザイク付きの通常カードから「獲得済み」表示に差し替える。
-// タップでいつでも再ダウンロードできるようにする。
+// タップでいつでも再ダウンロードできるようにする。直筆(special)は当選演出と同じ
+// 金の輝き・グロー・スパークルを付けて、通常当選より豪華な見た目にする。
 function revealOwnedCard(prize) {
   const card = prizeCardEls[prize.id];
   if (!card || card.classList.contains("owned")) return;
@@ -673,6 +711,14 @@ function revealOwnedCard(prize) {
   badge.className = "ownedBadge";
   badge.textContent = prize.special ? "✨ 獲得済み" : "✓ 獲得済み";
   card.appendChild(badge);
+  if (prize.special) {
+    for (const pos of ["1", "2"]) {
+      const sparkle = document.createElement("span");
+      sparkle.className = `specialSparkle specialSparkle--${pos}`;
+      sparkle.textContent = "✨";
+      card.appendChild(sparkle);
+    }
+  }
   const dl = document.createElement("div");
   dl.className = "ownedDownload";
   dl.textContent = "⬇ 保存";
@@ -680,7 +726,30 @@ function revealOwnedCard(prize) {
   card.addEventListener("click", () => downloadImage(prize.image));
 }
 
-// ウォレット接続後に呼ぶ: これまで実際に当てた景品を取得し、ギャラリーのモザイクを解除する。
+function renderHistory(prizes) {
+  const box = $("historyBox");
+  const list = $("historyList");
+  const recent = prizes.slice(0, 5);
+  if (recent.length === 0) {
+    box.classList.add("hidden");
+    return;
+  }
+  list.innerHTML = "";
+  for (const prize of recent) {
+    const when = new Date(prize.wonAt).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    const li = document.createElement("li");
+    if (prize.special) li.className = "special";
+    li.innerHTML = `
+      <span class="historyThumb"><img src="/nft-images/${prize.image}" alt="" loading="lazy"></span>
+      <span class="historyText">${when}・<span class="historyPrice">${prize.price ?? "?"} ICHIGO</span> → <strong>${prize.name}</strong></span>
+    `;
+    list.appendChild(li);
+  }
+  box.classList.remove("hidden");
+}
+
+// ウォレット接続後に呼ぶ: これまで実際に当てた景品を取得し、ギャラリーのモザイクを解除+
+// 直近の記録一覧を組み立てる(同じ一覧データを両方に使い回す)。
 async function loadMyPrizes(wallet) {
   try {
     if (galleryReady) await galleryReady;
@@ -693,6 +762,7 @@ async function loadMyPrizes(wallet) {
       seen.add(prize.id);
       revealOwnedCard(prize);
     }
+    renderHistory(data.prizes);
   } catch {
     // 取得できなくても参加フロー自体には影響しない
   }
@@ -934,7 +1004,8 @@ function enterReceiptPhase({ prize, price, txHash }) {
 
 function renderReceipt(receipt) {
   hideAllSections();
-  $("introSection").classList.add("hidden");
+  $("pitchSection").classList.add("hidden");
+  $("dashboardSection").classList.add("hidden");
   $("connectBtn").classList.add("hidden");
   $("account").classList.add("hidden");
   $("balanceLabel").classList.add("hidden");
@@ -966,10 +1037,18 @@ function tryRestoreReceipt() {
   return true;
 }
 
+// 「トップへもどる」は以前location.reload()していたため、毎回ウォレットの再接続
+// (MetaMaskの承認)が必要になっていた。account/signer/tokenはメモリ上にまだ残っている
+// ので、reloadせずにホーム画面へ戻すだけで再接続を挟まずに済む。
 $("buyAgainBtn").addEventListener("click", () => {
   localStorage.removeItem(RECEIPT_STORAGE_KEY);
   localStorage.removeItem(SESSION_STORAGE_KEY);
-  location.reload();
+  $("connectBtn").classList.add("hidden");
+  $("account").classList.remove("hidden");
+  $("balanceLabel").classList.remove("hidden");
+  refreshBalance();
+  loadMyPrizes(account); // 直近の記録・ギャラリーに今回の当選を反映する
+  showHome();
 });
 
 $("connectBtn").addEventListener("click", async () => {
@@ -996,44 +1075,43 @@ $("connectBtn").addEventListener("click", async () => {
     await refreshBalance();
     $("connectBtn").disabled = true;
     $("connectBtn").classList.add("hidden");
-    $("myCollectionBtn").classList.remove("hidden");
-    $("drawAgainBtn").classList.remove("hidden");
-    loadMyPrizes(account); // ギャラリーのモザイク解除(交渉中も裏で更新しておき、ボタンでいつでも見返せるように)
+    $("homeBtn").classList.remove("hidden");
+    $("pitchSection").classList.add("hidden"); // 遊び方の説明は接続後は役目を終える(1回読めば十分)
+    loadMyPrizes(account); // ギャラリーのモザイク解除+直近の記録(交渉中も裏で更新しておく)
     showStatus("", "");
-    await enterNegotiationFlow();
+
+    // 交渉の途中だった(保存済みセッションがある)ならそこに復帰、無ければホーム画面へ。
+    const saved = readJSON(SESSION_STORAGE_KEY);
+    if (saved && saved.wallet === account.toLowerCase() && Date.now() - saved.savedAt < SESSION_POINTER_TTL_MS) {
+      await startNegotiation(saved.displayName || "");
+    } else {
+      showHome();
+    }
   } catch (err) {
     showStatus("接続エラー: " + (err.shortMessage || err.message || err), "err");
   }
 });
 
-// 保存済みセッションがあれば復帰、無ければ呼び名入力から開始する。ウォレット接続直後と、
-// 「もう一度ガチャを引く」ボタンの両方から呼ぶ共通処理。
-async function enterNegotiationFlow() {
-  // 遊び方の説明・景品ギャラリーといった導入コンテンツは役目を終えたら畳む。表示したままだと
-  // 交渉・支払い・景品お披露目の各画面が毎回この下(スマホだと1000px超)までスクロールしないと
-  // 見えず、1人プレイの操作性を大きく損なうため(「集めた景品を見る」ボタンでいつでも呼び戻せる)。
-  $("introSection").classList.add("hidden");
-  const saved = readJSON(SESSION_STORAGE_KEY);
-  if (saved && saved.wallet === account.toLowerCase() && Date.now() - saved.savedAt < SESSION_POINTER_TTL_MS) {
-    await startNegotiation(saved.displayName || "");
-  } else {
-    hideAllSections();
-    $("nameSection").classList.remove("hidden");
-  }
+// 接続後の「ホーム」画面(ガチャを回すボタン・直近の記録・景品ギャラリー)を表示する。
+// ウォレット接続直後、「ホームに戻る」ボタン、支払い完了後の両方から呼ぶ共通処理。
+function showHome() {
+  hideAllSections();
+  $("dashboardSection").classList.remove("hidden");
 }
 
-// 交渉・支払い・景品お披露目の途中でも、いつでも「これまで集めた景品」に戻って
-// 見返せるようにする(ボタンで導入セクション=ギャラリーを再表示するだけの単純な仕組み)。
-$("myCollectionBtn").addEventListener("click", () => {
+// ホームから実際の交渉へ進む。この時点でホームが表示できているということは
+// 再接続済みのウォレットがあるということなので、あらためて接続を挟む必要は無い。
+$("spinBtn").addEventListener("click", () => {
+  $("dashboardSection").classList.add("hidden");
   hideAllSections();
-  const intro = $("introSection");
-  intro.classList.remove("hidden");
-  intro.scrollIntoView({ behavior: "smooth", block: "start" });
+  $("nameSection").classList.remove("hidden");
 });
 
-// 景品ギャラリー(集めた景品ビュー)から、もう一度ガチャを引く交渉に戻る。
-$("drawAgainBtn").addEventListener("click", () => {
-  enterNegotiationFlow();
+// 交渉・支払い・景品お披露目の途中でも、いつでもホーム(ガチャを回すボタン・記録・
+// ギャラリー)に戻れるようにする。
+$("homeBtn").addEventListener("click", () => {
+  showHome();
+  $("dashboardSection").scrollIntoView({ behavior: "smooth", block: "start" });
 });
 
 const DISPLAY_NAME_PATTERN = /^[0-9A-Za-z぀-ヿ ]*$/;
