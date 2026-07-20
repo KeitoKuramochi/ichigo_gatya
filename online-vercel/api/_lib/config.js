@@ -13,7 +13,11 @@ const {
   NEGOTIATE_ABSOLUTE_FLOOR = '0',
   NEGOTIATE_MAX_TURNS = '4',
   NEGOTIATE_QUOTE_TTL_MS = String(10 * 60 * 1000),
-  ONLINE_MAX_CONCURRENT = '2',
+  // 現地版(実機1台)の名残で当初2にしていたが、オンライン専用になった今は
+  // 台数の制約が無いため、実質無制限とみなせる大きめの値をデフォルトにする
+  // (0や極端な巨大値にしない理由: AI API呼び出しが同時に集中した場合の
+  // 異常系(タイムアウト連鎖等)を完全に無視しないための緩い安全弁として残す)。
+  ONLINE_MAX_CONCURRENT = '100',
 } = process.env;
 
 export const COST_NUM = Number(COST);
