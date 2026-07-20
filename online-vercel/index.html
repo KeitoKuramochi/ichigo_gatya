@@ -219,6 +219,11 @@
     position: absolute; z-index: 1; bottom: 4px; right: 4px; font-size: .62rem;
     background: rgba(0,0,0,.55); color: #fff8ee; border-radius: 4px; padding: 2px 6px;
   }
+  /* 何回同じ絵柄を当てたか(確率には無関係な、単なる記録の表示) */
+  .prizeCard.owned .dupCount {
+    position: absolute; z-index: 1; top: 4px; right: 4px; font-size: .62rem; font-weight: 700;
+    background: rgba(0,0,0,.6); color: var(--gold); border-radius: 4px; padding: 2px 6px;
+  }
   /* 直筆(手描きスペシャル)は当選演出と同じ金の輝き・グロー・スパークルで豪華に見せる */
   .prizeCard.owned.special {
     box-shadow: 0 0 0 2px var(--gold), 0 0 16px rgba(224,178,92,.7);
@@ -747,7 +752,9 @@ function downloadImage(image) {
 // 実際に当てた景品のカードを、モザイク付きの通常カードから「獲得済み」表示に差し替える。
 // タップでいつでも再ダウンロードできるようにする。直筆(special)は当選演出と同じ
 // 金の輝き・グロー・スパークルを付けて、通常当選より豪華な見た目にする。
-function revealOwnedCard(prize) {
+// count(同じ絵柄を何回当てたか)は確率には一切影響しない、単なる記録として表示するだけ
+// (要望により追加。「別に確率は変えないで」との指定通り、抽選ロジック側は無変更)。
+function revealOwnedCard(prize, count) {
   const card = prizeCardEls[prize.id];
   if (!card || card.classList.contains("owned")) return;
   card.classList.add("owned");
@@ -763,6 +770,13 @@ function revealOwnedCard(prize) {
   badge.className = "ownedBadge";
   badge.textContent = prize.special ? "✨ 獲得済み" : "✓ 獲得済み";
   card.appendChild(badge);
+  if (count > 1) {
+    const dup = document.createElement("div");
+    dup.className = "dupCount";
+    dup.textContent = `×${count}`;
+    dup.title = `${prize.name}をこれまでに${count}回獲得`;
+    card.appendChild(dup);
+  }
   if (prize.special) {
     for (const pos of ["1", "2"]) {
       const sparkle = document.createElement("span");
@@ -808,11 +822,13 @@ async function loadMyPrizes(wallet) {
     const res = await fetch(`/online-my-prizes?wallet=${wallet}`);
     const data = await res.json();
     if (!data.ok) return;
+    const counts = {}; // id -> 何回当てたか(確率には影響しない、表示用の集計だけ)
+    for (const prize of data.prizes) counts[prize.id] = (counts[prize.id] || 0) + 1;
     const seen = new Set();
     for (const prize of data.prizes) {
       if (seen.has(prize.id)) continue; // 同じ絵柄を複数回当てていてもカードは1枚だけ解除すればよい
       seen.add(prize.id);
-      revealOwnedCard(prize);
+      revealOwnedCard(prize, counts[prize.id]);
     }
     renderHistory(data.prizes);
   } catch {
