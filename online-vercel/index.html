@@ -121,7 +121,36 @@
   .priceTag .unit { font-family: var(--font-body); font-weight: 500; font-size: .68em; color: var(--ink-soft); margin-left: 3px; }
   .balance:empty { display: none; }
   .priceTag--big { font-size: 1.5rem; }
-  .turnBadge { color: var(--ink-soft); font-size: .85rem; margin-left: 8px; }
+
+  /* ==== 交渉の残りターン表示 ====
+     以前は価格表示の横に小さく「(1/4ターン)」と出すだけで見落としやすく、
+     何の予告もなく交渉が終わって支払い画面に切り替わる(ように感じる)という
+     指摘を受けたため、チャット欄の直上に大きく・常時見える形で出す。 */
+  .turnMeter {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    background: var(--paper-deep); border-radius: 10px; padding: 8px 14px; margin-bottom: 8px;
+    font-size: .85rem; color: var(--ink);
+  }
+  .turnMeter .turnDots { display: flex; gap: 6px; }
+  .turnMeter .turnDot {
+    width: 13px; height: 13px; border-radius: 50%; background: rgba(43,33,24,.18);
+    box-shadow: inset 0 0 0 1px rgba(43,33,24,.15);
+  }
+  .turnMeter .turnDot.used { background: var(--ink-soft); }
+  .turnMeter .turnDot.current { background: var(--vermilion); box-shadow: 0 0 0 3px rgba(193,64,46,.25); }
+  .turnMeter .turnRemainText { font-weight: 700; }
+  .turnMeter.lastTurn { background: var(--vermilion); color: #fff8ee; animation: turnMeterPulse 1s ease-in-out infinite; }
+  .turnMeter.lastTurn .turnDot { background: rgba(255,248,238,.4); }
+  .turnMeter.lastTurn .turnDot.used, .turnMeter.lastTurn .turnDot.current { background: #fff8ee; }
+  @keyframes turnMeterPulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(193,64,46,.5); }
+    50% { box-shadow: 0 0 0 6px rgba(193,64,46,0); }
+  }
+  .lastTurnNotice {
+    text-align: center; font-weight: 700; color: var(--vermilion-deep);
+    background: #fdf1cf; border: 1px solid var(--gold); border-radius: 8px;
+    padding: 6px 10px; margin-bottom: 8px; font-size: .85rem;
+  }
 
   .muted { color: var(--ink-soft); font-size: .85rem; }
   .ok { color: #3f7a4f; }
@@ -436,6 +465,12 @@
     </div>
 
     <div id="chatSection" class="hidden">
+      <p class="muted">💬 会話は最大<span id="maxTurnInline"></span>回まで。回数を使い切ると、その時点の価格で自動的に確定します。</p>
+      <div class="turnMeter" id="turnMeter">
+        <span class="turnRemainText" id="turnRemainText"></span>
+        <span class="turnDots" id="turnDots"></span>
+      </div>
+      <p class="lastTurnNotice hidden" id="lastTurnNotice">⚠️ 次のひとことが最後です!悔いのないように</p>
       <div class="chat" id="chat"></div>
       <div class="chatInputRow">
         <input id="chatInput" type="text" maxlength="500" placeholder="店番に話しかける…">
@@ -444,7 +479,6 @@
       <button id="finalizeBtn"><span class="iconBadge"><img class="btnIcon" src="assets/icon-decide.png" alt=""></span>この価格で決める</button>
       <p class="priceLine">現在の提示価格
         <span class="priceTag"><span id="priceLabel"></span> <span class="unit">ICHIGO</span></span>
-        <span class="turnBadge">(<span id="turnLabel"></span>)</span>
       </p>
     </div>
 
@@ -630,9 +664,27 @@ function renderPastChat(containerId, labelId, transcript) {
   $(labelId).classList.remove("hidden");
 }
 
+// 「0/4ターン」という小さな分数表示は見落としやすく、何の予告も無く交渉が終わって
+// 支払い画面に切り替わる(ように感じる)という指摘を受けて、①常に見える大きめの
+// 「残り◯回」表示、②残り1回になったら赤く点滅+はっきりした警告文、の2段構えにした。
 function setNegotiationUiState(price, turn, maxTurn) {
   $("priceLabel").textContent = price;
-  $("turnLabel").textContent = `${turn}/${maxTurn}ターン`;
+  $("maxTurnInline").textContent = maxTurn;
+
+  const remaining = Math.max(0, maxTurn - turn);
+  $("turnRemainText").textContent = remaining >= 1 ? `のこり ${remaining} 回` : "最後のやり取り中…";
+
+  const dots = $("turnDots");
+  dots.innerHTML = "";
+  for (let i = 0; i < maxTurn; i++) {
+    const dot = document.createElement("span");
+    dot.className = "turnDot" + (i < turn ? " used" : i === turn ? " current" : "");
+    dots.appendChild(dot);
+  }
+
+  const isLastTurn = remaining <= 1;
+  $("turnMeter").classList.toggle("lastTurn", isLastTurn);
+  $("lastTurnNotice").classList.toggle("hidden", !isLastTurn);
 }
 
 const CHARACTER_IMAGES = {
