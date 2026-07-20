@@ -1097,6 +1097,10 @@ $("connectBtn").addEventListener("click", async () => {
 function showHome() {
   hideAllSections();
   $("dashboardSection").classList.remove("hidden");
+  // 直前まで「決定」「お礼」のポーズのままだと(setCharacterImageは同じ状態への
+  // 変更を無視するガードがあるだけで、ここで戻す呼び出しが無いと)ホームに戻っても
+  // 出しっぱなしになる。ホームでは常に最初の「いらっしゃい」ポーズに戻す。
+  setCharacterImage("greet");
 }
 
 // ホームから実際の交渉へ進む。この時点でホームが表示できているということは
